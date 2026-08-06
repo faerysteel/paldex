@@ -24,6 +24,7 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
   const [dex, setDex] = useState<DexProgressView | null>(null);
   const [players, setPlayers] = useState<PlayerProgressView[] | null>(null);
   const [playerFlags, setPlayerFlags] = useState<PlayerFlagsView[] | null>(null);
+  const [icons, setIcons] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [resyncing, setResyncing] = useState(false);
   const [filter, setFilter] = useState("");
@@ -42,6 +43,16 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
       setDex(dexResult);
       setPlayers(playersResult);
       setPlayerFlags(flagsResult);
+
+      // One batched call for the few hundred distinct species on screen —
+      // per-row requests would be hundreds of IPC round trips. Artwork is
+      // optional, so a failure here must not blank the roster.
+      const species = [...new Set(palsResult.map((p) => p.characterId))];
+      try {
+        setIcons(await invoke<Record<string, string>>("pal_icons", { characterIds: species }));
+      } catch (e) {
+        console.warn("icons unavailable:", e);
+      }
     } catch (e) {
       setError(String(e));
     }
@@ -200,6 +211,7 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
           <table className="roster-table">
             <thead>
               <tr>
+                <th className="icon-col" aria-label="Icon"></th>
                 <SortableHeader column="characterId" sort={sort} onToggle={toggleSort}>
                   Species
                 </SortableHeader>
@@ -222,6 +234,18 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
             <tbody>
               {filtered.map((pal) => (
                 <tr key={pal.instanceId}>
+                  <td className="icon-col">
+                    {icons[pal.characterId] && (
+                      <img
+                        className="pal-icon"
+                        src={icons[pal.characterId]}
+                        alt=""
+                        loading="lazy"
+                        width={32}
+                        height={32}
+                      />
+                    )}
+                  </td>
                   <td className="species" title={pal.characterId}>
                     {speciesLabel(pal)}
                   </td>

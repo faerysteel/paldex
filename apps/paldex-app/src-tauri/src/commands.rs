@@ -1,5 +1,6 @@
 //! Commands exposed to the frontend.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -22,12 +23,28 @@ pub struct AppState {
     /// Reference data from the installed game pak, loaded once on first use.
     /// The inner `None` means no pak was found — the app stays usable without
     /// the game installed, just with internal ids instead of display names.
-    reference: OnceLock<Option<ReferenceIndex>>,
+    reference: OnceLock<Option<LoadedReference>>,
+}
+
+/// The extracted reference index plus the pak it came from.
+///
+/// The pak is kept open because icons are decoded lazily: re-opening it per
+/// request would re-parse a 185,000-entry index (~65 ms) every time.
+struct LoadedReference {
+    index: ReferenceIndex,
+    pak: Mutex<Pak>,
+    /// Species key -> PNG data URL, or `None` for a species with no artwork.
+    /// Decoding is a block-decompress plus a PNG encode, so results are kept.
+    icons: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl AppState {
-    fn reference(&self) -> Option<&ReferenceIndex> {
+    fn loaded_reference(&self) -> Option<&LoadedReference> {
         self.reference.get_or_init(load_reference).as_ref()
+    }
+
+    fn reference(&self) -> Option<&ReferenceIndex> {
+        self.loaded_reference().map(|r| &r.index)
     }
 }
 
@@ -35,13 +52,19 @@ impl AppState {
 ///
 /// Failure is never fatal: a missing or unreadable pak degrades the UI to raw
 /// ids rather than breaking it.
-fn load_reference() -> Option<ReferenceIndex> {
+fn load_reference() -> Option<LoadedReference> {
     for path in discover_paks() {
         let Ok(mut pak) = Pak::open(&path) else {
             continue;
         };
         match ReferenceIndex::extract(&mut pak, "en") {
-            Ok(index) => return Some(index),
+            Ok(index) => {
+                return Some(LoadedReference {
+                    index,
+                    pak: Mutex::new(pak),
+                    icons: Mutex::new(HashMap::new()),
+                })
+            }
             Err(e) => eprintln!("reference extraction failed for {}: {e}", path.display()),
         }
     }
@@ -250,6 +273,60 @@ fn resolve_or_id(resolved: Option<&str>, id: &str) -> String {
     resolved.unwrap_or(id).to_owned()
 }
 
+/// Species artwork as `data:image/png;base64,…` URLs, keyed by the
+/// `character_id` that was asked for.
+///
+/// Batched deliberately: a full roster spans a few hundred distinct species,
+/// and one IPC round trip each would be far more expensive than the decoding.
+/// Species with no artwork are simply absent from the result, so the UI falls
+/// back to text.
+///
+/// # Errors
+///
+/// A display-ready message only if the icon cache lock is poisoned. A pak that
+/// is missing, or an individual icon that fails to decode, yields fewer
+/// entries rather than an error — artwork is never worth failing a screen over.
+#[tauri::command]
+pub fn pal_icons(
+    state: State<AppState>,
+    character_ids: Vec<String>,
+) -> Result<HashMap<String, String>, String> {
+    let mut out = HashMap::new();
+    let Some(reference) = state.loaded_reference() else {
+        return Ok(out);
+    };
+
+    let mut cache = reference.icons.lock().map_err(|_| "icon cache poisoned".to_owned())?;
+    for id in character_ids {
+        if !cache.contains_key(&id) {
+            let decoded = reference.index.icon_path(&id).and_then(|path| {
+                let path = path.to_owned();
+                let mut pak = reference.pak.lock().ok()?;
+                match paldex_data::load_icon_png(&mut pak, &path) {
+                    Ok(png) => Some(png),
+                    Err(e) => {
+                        eprintln!("decoding icon for {id}: {e}");
+                        None
+                    }
+                }
+            });
+            cache.insert(id.clone(), decoded.map(|png| to_png_data_url(&png)));
+        }
+        if let Some(Some(url)) = cache.get(&id) {
+            out.insert(id, url.clone());
+        }
+    }
+    Ok(out)
+}
+
+fn to_png_data_url(png: &[u8]) -> String {
+    use base64::Engine as _;
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    )
+}
+
 /// Whether pak-derived reference data is available, so the UI can explain why
 /// species show as internal ids when it isn't.
 #[derive(Debug, Serialize)]
@@ -355,14 +432,15 @@ mod tests {
 
     #[test]
     fn enrichment_names_species_and_drops_human_npcs() {
-        let (Some((mut roster, _)), Some(reference)) = (real_snapshot(), load_reference()) else {
+        let (Some((mut roster, _)), Some(loaded)) = (real_snapshot(), load_reference()) else {
             eprintln!("skipping: need both a real save and the game pak");
             return;
         };
+        let reference = &loaded.index;
 
         let before = roster.len();
         let npcs = roster.iter().filter(|p| reference.is_human_npc(&p.character_id)).count();
-        enrich_roster(&mut roster, &reference);
+        enrich_roster(&mut roster, reference);
         eprintln!("roster {before} -> {} ({npcs} human NPCs removed)", roster.len());
 
         assert_eq!(roster.len(), before - npcs);
@@ -418,16 +496,50 @@ mod tests {
         }
     }
 
+    /// Icons must survive the whole app-layer path: pak -> decode -> PNG ->
+    /// data URL, keyed by the same `character_id` the roster carries.
+    #[test]
+    fn roster_species_resolve_to_icon_data_urls() {
+        let (Some((roster, _)), Some(loaded)) = (real_snapshot(), load_reference()) else {
+            eprintln!("skipping: need both a real save and the game pak");
+            return;
+        };
+        let reference = &loaded.index;
+
+        let species: std::collections::BTreeSet<String> =
+            roster.iter().map(|p| p.character_id.clone()).collect();
+        let mut resolved = 0usize;
+        for id in &species {
+            let Some(path) = reference.icon_path(id) else { continue };
+            let path = path.to_owned();
+            let mut pak = loaded.pak.lock().expect("pak lock");
+            let png = paldex_data::load_icon_png(&mut pak, &path)
+                .unwrap_or_else(|e| panic!("decoding icon for {id}: {e}"));
+            let url = to_png_data_url(&png);
+            assert!(url.starts_with("data:image/png;base64,"), "{id} should be a PNG data URL");
+            assert!(url.len() > 100, "{id} data URL suspiciously short");
+            resolved += 1;
+        }
+
+        eprintln!("{resolved}/{} roster species decoded to icons", species.len());
+        assert!(
+            resolved * 100 / species.len().max(1) >= 90,
+            "expected most roster species to have artwork, got {resolved}/{}",
+            species.len()
+        );
+    }
+
     /// The plan's Phase 7 criterion: every unlocked tech name should resolve to
     /// a reference definition.
     #[test]
     fn enrichment_names_unlocked_technologies() {
-        let (Some((_, mut flags)), Some(reference)) = (real_snapshot(), load_reference()) else {
+        let (Some((_, mut flags)), Some(loaded)) = (real_snapshot(), load_reference()) else {
             eprintln!("skipping: need both a real save and the game pak");
             return;
         };
+        let reference = &loaded.index;
 
-        enrich_flags(&mut flags, &reference);
+        enrich_flags(&mut flags, reference);
         assert!(!flags.is_empty(), "the real world has players");
 
         let total: usize = flags.iter().map(|f| f.unlocked_tech.len()).sum();

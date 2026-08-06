@@ -353,3 +353,17 @@ code {
 .sortable-active {
   color: var(--accent);
 }
+
+/* Species artwork, extracted from the player's own game pak. The column keeps
+   its width whether or not an icon resolved, so rows never jump. */
+.roster-table .icon-col {
+  width: 40px;
+  padding-right: 0;
+}
+
+.roster-table .pal-icon {
+  display: block;
+  width: 32px;
+  height: 32px;
+  image-rendering: auto;
+}
