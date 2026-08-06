@@ -148,3 +148,28 @@ fn player_count_matches_a_real_player_character() {
     // At least the host has an in-world character entry.
     assert!(result.player_count >= 1);
 }
+
+#[test]
+fn quality_analysis_runs_against_the_real_roster() {
+    let entries = require_real_entries!();
+    let result = decode_character_map(&entries);
+
+    let best = paldex_model::best_of_species(&result.pals);
+    let candidates = paldex_model::condense_candidates(&result.pals);
+    let ranked = paldex_model::rank_by_passives(&result.pals);
+
+    eprintln!(
+        "{} species, {} condense candidates, top passive count: {}",
+        best.len(),
+        candidates.len(),
+        ranked.first().map(|p| p.passives.len()).unwrap_or(0)
+    );
+
+    assert!(!best.is_empty());
+    assert_eq!(ranked.len(), result.pals.len());
+    // No candidate should be its species' best-of-species specimen.
+    for c in &candidates {
+        let species_best = &best[c.character_id.as_str()];
+        assert_ne!(c.instance_id, species_best.instance_id);
+    }
+}
