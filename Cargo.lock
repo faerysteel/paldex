@@ -2175,6 +2175,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "paldex-gvas"
+version = "0.1.0"
+dependencies = [
+ "paldex-locate",
+ "paldex-sav",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "paldex-locate"
 version = "0.1.0"
 dependencies = [
