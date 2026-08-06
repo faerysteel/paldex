@@ -246,6 +246,61 @@ mod tests {
     }
 
     #[test]
+    fn parses_an_array_of_structs() {
+        // Arrays of structs carry one leading "dummy" tag (name/type/size/
+        // struct_name/struct_guid/has_property_guid — a full tag in miniature,
+        // including its own has_property_guid byte) before the elements.
+        // Regression test for a real off-by-one found against Palworld's
+        // CharacterContainerSaveData/PalCharacterSlotSaveData array, where a
+        // missing has_property_guid read shifted every element by one byte.
+        let mut element = Vec::new();
+        push_int_property(&mut element, "SlotIndex", 3);
+        push_none(&mut element);
+
+        let mut b = header_bytes();
+        push_fstring(&mut b, "Slots");
+        push_fstring(&mut b, "ArrayProperty");
+        let dummy_tag_len = 4 + "Slots".len() + 1 // name
+            + 4 + "StructProperty".len() + 1       // type
+            + 8                                    // size
+            + 4 + "MySlot".len() + 1                // struct_name
+            + 16                                    // struct_guid
+            + 1; // has_property_guid
+        let array_value_len = 4 + dummy_tag_len + element.len(); // count + dummy tag + 1 element
+        b.extend_from_slice(&(array_value_len as i64).to_le_bytes());
+        push_fstring(&mut b, "StructProperty"); // inner_type
+        b.push(0); // has_property_guid (outer ArrayProperty tag)
+
+        // Value: count comes first, then the dummy tag, then the elements —
+        // verified against the real byte layout (see comment above).
+        b.extend_from_slice(&1u32.to_le_bytes()); // element count
+        push_fstring(&mut b, "Slots"); // dummy tag name
+        push_fstring(&mut b, "StructProperty"); // dummy tag type
+        b.extend_from_slice(&0i64.to_le_bytes()); // dummy tag size (unused by the reader)
+        push_fstring(&mut b, "MySlot"); // struct_name
+        b.extend_from_slice(&[0u8; 16]); // struct_guid
+        b.push(0); // dummy tag's own has_property_guid — the byte that was missing
+
+        b.extend_from_slice(&element);
+        push_none(&mut b);
+
+        let root = parse(&b).unwrap();
+        let Some(Value::Array(items)) = root.get("Slots") else {
+            panic!("expected an array");
+        };
+        assert_eq!(items.len(), 1);
+        let Value::Struct { struct_name, value } = &items[0] else {
+            panic!("expected a struct element, got {:?}", items[0]);
+        };
+        assert_eq!(struct_name, "MySlot");
+        let StructValue::Properties(props) = value else {
+            panic!("expected a nested property list");
+        };
+        assert_eq!(props[0].name, "SlotIndex");
+        assert_eq!(props[0].value, Value::Int(3));
+    }
+
+    #[test]
     fn parses_a_map_of_struct_keys_and_int_values() {
         let mut key = Vec::new();
         push_int_property(&mut key, "InstanceId", 7);

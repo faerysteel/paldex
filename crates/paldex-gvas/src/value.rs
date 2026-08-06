@@ -348,6 +348,13 @@ fn try_decode_array(cursor: &mut Cursor, inner_type: &str, size: usize) -> Resul
         }
         let struct_name = sub.fstring()?;
         sub.guid()?;
+        // The dummy tag is a full property tag in miniature, right down to its
+        // own has_property_guid byte — verified against a real
+        // CharacterContainerSaveData/PalCharacterSlotSaveData array; missing
+        // this one byte silently shifted every element read by one byte.
+        if sub.bool()? {
+            sub.guid()?;
+        }
         for _ in 0..count {
             let props = parse_property_list(&mut sub)?;
             items.push(Value::Struct {
