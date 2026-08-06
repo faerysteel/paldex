@@ -7,13 +7,17 @@
 //!
 //! Players have an in-world character entry in this same map (`IsPlayer: true`)
 //! sharing most of the same fields — these are skipped from the roster; their
-//! real progression data lives in a separate `Players/<uid>.sav` file, not
-//! decoded here.
+//! real progression data lives in a separate `Players/<uid>.sav` file, decoded
+//! by the `player` module.
 
-use paldex_gvas::{ByteValue, Property, StructValue, Value};
+use paldex_gvas::{StructValue, Value};
 use uuid::Uuid;
 
-use crate::types::{Gender, Ivs, PalLocation, Pal, SoulUpgrades};
+use crate::gvas_ext::{
+    find, find_byte, find_container_id, find_enum, find_enum_array, find_guid, find_name_array,
+    find_str, struct_properties,
+};
+use crate::types::{Gender, Ivs, Pal, PalLocation, PalLocationKind, SoulUpgrades};
 
 /// The result of decoding `CharacterSaveParameterMap`.
 ///
@@ -77,7 +81,7 @@ fn decode_entry(key: &Value, value: &Value) -> Result<Classified, String> {
     Ok(Classified::Pal(build_pal(instance_id, save_param)))
 }
 
-fn build_pal(instance_id: Uuid, sp: &[Property]) -> Pal {
+fn build_pal(instance_id: Uuid, sp: &[paldex_gvas::Property]) -> Pal {
     let raw_character_id = match find(sp, "CharacterID") {
         Some(Value::Name(s)) => s.as_str(),
         _ => "",
@@ -131,84 +135,9 @@ fn parse_gender(value: &str) -> Gender {
     }
 }
 
-fn find<'a>(props: &'a [Property], name: &str) -> Option<&'a Value> {
-    props.iter().find(|p| p.name == name).map(|p| &p.value)
-}
-
-fn struct_properties(value: &Value) -> Option<&[Property]> {
-    match value {
-        Value::Struct {
-            value: StructValue::Properties(props),
-            ..
-        } => Some(props),
-        _ => None,
-    }
-}
-
-fn find_guid(props: &[Property], name: &str) -> Option<Uuid> {
-    match find(props, name) {
-        Some(Value::Struct {
-            value: StructValue::Guid(bytes),
-            ..
-        }) => Some(Uuid::from_bytes(*bytes)),
-        _ => None,
-    }
-}
-
-fn find_byte(props: &[Property], name: &str) -> Option<u8> {
-    match find(props, name) {
-        Some(Value::Byte {
-            value: ByteValue::Raw(b),
-            ..
-        }) => Some(*b),
-        _ => None,
-    }
-}
-
-fn find_str<'a>(props: &'a [Property], name: &str) -> Option<&'a str> {
-    match find(props, name) {
-        Some(Value::Str(s)) => Some(s.as_str()),
-        _ => None,
-    }
-}
-
-fn find_enum<'a>(props: &'a [Property], name: &str) -> Option<&'a str> {
-    match find(props, name) {
-        Some(Value::Enum { value, .. }) => Some(value.as_str()),
-        _ => None,
-    }
-}
-
-fn find_name_array(props: &[Property], name: &str) -> Vec<String> {
-    match find(props, name) {
-        Some(Value::Array(items)) => items
-            .iter()
-            .filter_map(|v| match v {
-                Value::Name(s) => Some(s.clone()),
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn find_enum_array(props: &[Property], name: &str) -> Vec<String> {
-    match find(props, name) {
-        Some(Value::Array(items)) => items
-            .iter()
-            .filter_map(|v| match v {
-                Value::Enum { value, .. } => Some(value.clone()),
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn find_slot_id(sp: &[Property]) -> Option<PalLocation> {
+fn find_slot_id(sp: &[paldex_gvas::Property]) -> Option<PalLocation> {
     let slot_props = struct_properties(find(sp, "SlotId")?)?;
-    let container_props = struct_properties(find(slot_props, "ContainerId")?)?;
-    let container_id = find_guid(container_props, "ID")?;
+    let container_id = find_container_id(slot_props, "ContainerId")?;
     let slot_index = match find(slot_props, "SlotIndex") {
         Some(Value::Int(n)) => u32::try_from(*n).ok()?,
         _ => return None,
@@ -216,5 +145,8 @@ fn find_slot_id(sp: &[Property]) -> Option<PalLocation> {
     Some(PalLocation {
         container_id,
         slot_index,
+        // Resolving Party/Box requires a player's container IDs, which live in
+        // a different file (`Players/<uid>.sav`) — see `resolve_locations`.
+        kind: PalLocationKind::Other,
     })
 }
