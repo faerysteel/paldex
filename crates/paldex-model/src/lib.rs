@@ -7,6 +7,7 @@ pub mod rawdata;
 pub mod types;
 
 pub use rawdata::character::{decode_character_map, CharacterMapResult};
+pub use rawdata::guild::{decode_group_map, GroupKind, Guild};
 pub use rawdata::player::decode_player;
 pub use types::{
     BossFlags, Collectibles, Gender, Ivs, MiscCounters, Pal, PalLocation, PalLocationKind,

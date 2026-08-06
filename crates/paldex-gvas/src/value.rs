@@ -294,10 +294,7 @@ fn decode_struct(cursor: &mut Cursor, struct_name: &str, size: usize) -> Result<
 /// none of the real collections carry compact-struct (`Guid`/`DateTime`) elements.
 fn decode_collection_element(cursor: &mut Cursor, type_name: &str) -> Result<Value, GvasError> {
     match type_name {
-        "StructProperty" => Ok(Value::Struct {
-            struct_name: String::new(),
-            value: StructValue::Properties(parse_property_list(cursor)?),
-        }),
+        "StructProperty" => decode_struct_collection_element(cursor),
         "IntProperty" => Ok(Value::Int(cursor.i32()?)),
         "Int64Property" => Ok(Value::Int64(cursor.i64()?)),
         "UInt32Property" => Ok(Value::UInt32(cursor.u32()?)),
@@ -315,6 +312,36 @@ fn decode_collection_element(cursor: &mut Cursor, type_name: &str) -> Result<Val
             value: cursor.fstring()?,
         }),
         other => Err(GvasError::UnsupportedCollectionElement(other.to_owned())),
+    }
+}
+
+/// A `StructProperty`-typed map/set element or array element with no dummy
+/// tag (map/set keys — arrays get a dummy tag, see `try_decode_array`).
+///
+/// Unlike a normal field's own tag, a collection element carries no concrete
+/// struct name, so there's no direct way to know whether it's a compact
+/// built-in type (a bare `Guid`, verified as `GroupSaveDataMap`'s key shape)
+/// or a generic tagged property list (verified as
+/// `CharacterSaveParameterMap`'s key shape). Disambiguate by peeking at
+/// whether the next 4 bytes look like a plausible FString length — a real
+/// property name is never longer than a couple hundred bytes, while a Guid's
+/// leading bytes interpreted as an i32 are essentially always outside that
+/// range.
+fn decode_struct_collection_element(cursor: &mut Cursor) -> Result<Value, GvasError> {
+    let start = cursor.pos();
+    let looks_like_tagged_list = cursor.i32().is_ok_and(|n| (1..=256).contains(&n));
+    cursor.set_pos(start)?;
+
+    if looks_like_tagged_list {
+        Ok(Value::Struct {
+            struct_name: String::new(),
+            value: StructValue::Properties(parse_property_list(cursor)?),
+        })
+    } else {
+        Ok(Value::Struct {
+            struct_name: "Guid".to_owned(),
+            value: StructValue::Guid(cursor.guid()?),
+        })
     }
 }
 

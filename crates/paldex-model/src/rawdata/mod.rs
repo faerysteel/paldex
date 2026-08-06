@@ -6,4 +6,5 @@
 //! deliberately never decoded — large, no tracker value.
 
 pub mod character;
+pub mod guild;
 pub mod player;
