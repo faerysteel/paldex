@@ -5,6 +5,7 @@
 //! `MapObjectSaveData`) are follow-up work. `FoliageGridSaveDataMap` is
 //! deliberately never decoded — large, no tracker value.
 
+pub mod base_camp;
 pub mod character;
 pub mod guild;
 pub mod player;

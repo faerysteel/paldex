@@ -27,12 +27,12 @@ fn main() {
             println!("{field}: Map with {} entries", entries.len());
             for (k, v) in entries.iter().take(sample_count) {
                 println!("--- key ---\n{}", serde_json::to_string_pretty(k).unwrap());
-                println!("--- value ---\n{}", serde_json::to_string_pretty(v).unwrap());
                 if let Value::Struct { value: StructValue::Properties(props), .. } = v {
+                    println!("--- value field names ---\n{:?}", props.iter().map(|p| &p.name).collect::<Vec<_>>());
                     for p in props {
                         if p.name == "RawData" {
                             if let Value::Raw(bytes) = &p.value {
-                                println!("--- value.RawData re-parsed ---");
+                                println!("--- value.RawData ({} bytes) re-parsed ---", bytes.len());
                                 match paldex_gvas::parse_property_list_bytes(bytes) {
                                     Ok(inner) => println!("{}", serde_json::to_string_pretty(&inner).unwrap()),
                                     Err(e) => println!("failed: {e}\nfirst 200 bytes: {:02x?}", &bytes[..bytes.len().min(200)]),
@@ -40,6 +40,8 @@ fn main() {
                             }
                         }
                     }
+                } else {
+                    println!("--- value ---\n{}", serde_json::to_string_pretty(v).unwrap());
                 }
             }
         }

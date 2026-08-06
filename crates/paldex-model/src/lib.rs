@@ -6,6 +6,7 @@ mod gvas_ext;
 pub mod rawdata;
 pub mod types;
 
+pub use rawdata::base_camp::{decode_base_camp_map, BaseCamp};
 pub use rawdata::character::{decode_character_map, CharacterMapResult};
 pub use rawdata::guild::{decode_group_map, GroupKind, Guild};
 pub use rawdata::player::decode_player;
