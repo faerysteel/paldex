@@ -115,12 +115,24 @@ impl Store {
 }
 
 impl Store {
-    /// Direct connection access for integration-test assertions that need to
-    /// check table contents `ingest_snapshot`'s own API doesn't expose. Not
-    /// meant for application code — everything it should need is above.
+    /// Direct connection access for queries beyond what the high-level API
+    /// covers — read-only reporting queries (roster tables, dex progress),
+    /// or test assertions on table contents.
     #[must_use]
-    pub fn conn_for_test(&self) -> &Connection {
+    pub fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// The most recent snapshot id for a world, if it has any.
+    pub fn latest_snapshot_id(&self, world_id: &str) -> Result<Option<i64>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM snapshots WHERE world_id = ?1 ORDER BY taken_at DESC LIMIT 1",
+                [world_id],
+                |row| row.get(0),
+            )
+            .ok())
     }
 }
 

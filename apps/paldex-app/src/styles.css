@@ -163,6 +163,16 @@ h2 {
   opacity: 0.62;
 }
 
+.world-clickable {
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.world-clickable:hover {
+  border-color: var(--accent);
+  background: var(--panel);
+}
+
 .world-main {
   display: flex;
   align-items: center;
@@ -249,4 +259,97 @@ code {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.05em 0.35em;
+}
+
+/* --- roster --------------------------------------------------------------- */
+
+.roster {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+.dex-summary {
+  margin: 0 0 1rem;
+  font-size: 0.88rem;
+}
+
+.filter {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.55rem 0.8rem;
+  font: inherit;
+  font-size: 0.88rem;
+  margin: 1rem 0;
+}
+
+.filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.roster-table-wrap {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  overflow-x: auto;
+}
+
+.roster-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.roster-table th,
+.roster-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.roster-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
+
+.roster-table tbody tr:hover {
+  background: var(--panel-2);
+}
+
+.roster-table .species {
+  font-weight: 600;
+}
+
+.roster-table .ivs {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.roster-table .passives {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sortable:hover {
+  color: var(--text);
+}
+
+.sortable-active {
+  color: var(--accent);
 }

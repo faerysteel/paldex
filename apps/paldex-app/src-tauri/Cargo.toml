@@ -17,6 +17,11 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 paldex-locate.workspace = true
+paldex-sav.workspace = true
+paldex-gvas.workspace = true
+paldex-model.workspace = true
+paldex-store.workspace = true
+sha2 = "0.10"
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }

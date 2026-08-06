@@ -103,13 +103,13 @@ fn ingests_a_real_snapshot_and_counts_reconcile() {
     assert!(snapshot_id > 0);
 
     let conn_pal_count: i64 = store
-        .conn_for_test()
+        .conn()
         .query_row("SELECT COUNT(*) FROM pals WHERE snapshot_id = ?1", [snapshot_id], |r| r.get(0))
         .unwrap();
     assert_eq!(conn_pal_count as usize, pal_count);
 
     let conn_player_count: i64 = store
-        .conn_for_test()
+        .conn()
         .query_row("SELECT COUNT(*) FROM players WHERE snapshot_id = ?1", [snapshot_id], |r| r.get(0))
         .unwrap();
     assert_eq!(conn_player_count as usize, player_count);
@@ -129,7 +129,7 @@ fn dex_events_are_monotonic_across_snapshots() {
     // Snapshot A: full data.
     store.ingest_snapshot("test-world", &input).unwrap();
     let count_a: i64 = store
-        .conn_for_test()
+        .conn()
         .query_row("SELECT COUNT(*) FROM dex_events WHERE world_id = 'test-world'", [], |r| r.get(0))
         .unwrap();
 
@@ -155,7 +155,7 @@ fn dex_events_are_monotonic_across_snapshots() {
     store.ingest_snapshot("test-world", &input_b).unwrap();
 
     let count_b: i64 = store
-        .conn_for_test()
+        .conn()
         .query_row("SELECT COUNT(*) FROM dex_events WHERE world_id = 'test-world'", [], |r| r.get(0))
         .unwrap();
 
@@ -187,7 +187,7 @@ fn pruning_keeps_exactly_n_snapshots() {
     assert_eq!(deleted, 3);
 
     let remaining: i64 = store
-        .conn_for_test()
+        .conn()
         .query_row("SELECT COUNT(*) FROM snapshots WHERE world_id = 'test-world'", [], |r| r.get(0))
         .unwrap();
     assert_eq!(remaining, 2);

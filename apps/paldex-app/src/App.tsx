@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import type { SaveRootView, World, WorldKind } from "./types";
+import type { SaveRootView, SnapshotSummaryView, World, WorldKind } from "./types";
 import { relativeTime } from "./time";
+import Roster from "./Roster";
 
 type LoadState =
   | { status: "loading" }
@@ -13,6 +14,33 @@ type LoadState =
 export default function App() {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [notice, setNotice] = useState<string | null>(null);
+  const [summary, setSummary] = useState<SnapshotSummaryView | null>(null);
+  const [selecting, setSelecting] = useState<string | null>(null);
+
+  const selectWorld = useCallback(async (world: World) => {
+    setSelecting(world.path);
+    setNotice(null);
+    try {
+      const result = await invoke<SnapshotSummaryView>("select_world", {
+        worldPath: world.path,
+      });
+      setSummary(result);
+    } catch (e) {
+      setNotice(String(e));
+    } finally {
+      setSelecting(null);
+    }
+  }, []);
+
+  if (summary) {
+    return (
+      <Roster
+        summary={summary}
+        onBack={() => setSummary(null)}
+        onSummaryChange={setSummary}
+      />
+    );
+  }
 
   const scan = useCallback(async () => {
     setState({ status: "loading" });
@@ -82,14 +110,29 @@ export default function App() {
           (state.roots.length === 0 ? (
             <NoSavesFound onChoose={() => void chooseFolder()} />
           ) : (
-            state.roots.map((root) => <RootCard key={root.path} root={root} />)
+            state.roots.map((root) => (
+              <RootCard
+                key={root.path}
+                root={root}
+                onSelectWorld={(w) => void selectWorld(w)}
+                selecting={selecting}
+              />
+            ))
           ))}
       </main>
     </div>
   );
 }
 
-function RootCard({ root }: { root: SaveRootView }) {
+function RootCard({
+  root,
+  onSelectWorld,
+  selecting,
+}: {
+  root: SaveRootView;
+  onSelectWorld: (world: World) => void;
+  selecting: string | null;
+}) {
   const trackable = root.worlds.filter((w) => w.kind === "localWorld");
   const others = root.worlds.filter((w) => w.kind !== "localWorld");
 
@@ -106,7 +149,12 @@ function RootCard({ root }: { root: SaveRootView }) {
       {trackable.length > 0 && (
         <ul className="worlds">
           {trackable.map((w) => (
-            <WorldRow key={w.path} world={w} />
+            <WorldRow
+              key={w.path}
+              world={w}
+              onSelect={onSelectWorld}
+              selecting={selecting === w.path}
+            />
           ))}
         </ul>
       )}
@@ -124,7 +172,7 @@ function RootCard({ root }: { root: SaveRootView }) {
           </p>
           <ul className="worlds">
             {others.map((w) => (
-              <WorldRow key={w.path} world={w} />
+              <WorldRow key={w.path} world={w} onSelect={onSelectWorld} selecting={false} />
             ))}
           </ul>
         </details>
@@ -137,10 +185,21 @@ function RootCard({ root }: { root: SaveRootView }) {
   );
 }
 
-function WorldRow({ world }: { world: World }) {
+function WorldRow({
+  world,
+  onSelect,
+  selecting,
+}: {
+  world: World;
+  onSelect: (world: World) => void;
+  selecting: boolean;
+}) {
   const trackable = world.kind === "localWorld";
   return (
-    <li className={trackable ? "world" : "world world-dim"}>
+    <li
+      className={trackable ? "world world-clickable" : "world world-dim"}
+      onClick={trackable ? () => onSelect(world) : undefined}
+    >
       <div className="world-main">
         <span className="world-id" title={world.id}>
           {world.id.slice(0, 8)}
@@ -157,6 +216,7 @@ function WorldRow({ world }: { world: World }) {
         <span title={formatAbsolute(world.lastPlayed)}>
           {relativeTime(world.lastPlayed)}
         </span>
+        {selecting && <span className="muted">Loading…</span>}
       </div>
     </li>
   );
