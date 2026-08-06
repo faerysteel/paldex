@@ -15,6 +15,7 @@ paldex-sav = { path = "crates/paldex-sav" }
 paldex-gvas = { path = "crates/paldex-gvas" }
 paldex-model = { path = "crates/paldex-model" }
 repak-oodle = { path = "crates/repak-oodle" }
+paldex-store = { path = "crates/paldex-store" }
 
 dirs = "6"
 serde = { version = "1", features = ["derive"] }
