@@ -67,6 +67,10 @@ const PAL_NAMES: (&str, &str) = ("DT_PalNameText_Common", "PAL_NAME_");
 const SKILL_NAMES: (&str, &str) = ("DT_SkillNameText_Common", "");
 const TECH_NAMES: (&str, &str) = ("DT_TechnologyNameText_Common", "NAME_RECIPE_");
 const ITEM_NAMES: (&str, &str) = ("DT_ItemNameText_Common", "ITEM_NAME_");
+const MAP_OBJECT_NAMES: (&str, &str) = ("DT_MapObjectNameText_Common", "MAPOBJECT_NAME_");
+
+/// Saves store passive ids bare; the skill text table prefixes them.
+const PASSIVE_KEY_PREFIX: &str = "PASSIVE_";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractError {
@@ -96,6 +100,7 @@ pub struct ReferenceIndex {
     passives: HashMap<String, PassiveSkill>,
     technologies: HashMap<String, String>,
     items: HashMap<String, String>,
+    map_objects: HashMap<String, String>,
     human_npc_ids: HashSet<String>,
     language: String,
 }
@@ -119,39 +124,56 @@ impl ReferenceIndex {
             let Some(character_id) = entry.key.strip_prefix(PAL_NAMES.1) else {
                 continue;
             };
+            let display = entry.display();
             index.species.insert(
                 normalize_key(character_id),
                 Species {
                     // Preserve the pak's own casing for display; only the
                     // lookup key is normalized.
                     character_id: character_id.to_owned(),
-                    display_name: entry
-                        .text
-                        .clone()
-                        .unwrap_or_else(|| character_id.to_owned()),
+                    display_name: display.unwrap_or_else(|| character_id.to_owned()),
                     dex_number: None,
                 },
             );
         }
 
         for entry in read_text_table(pak, &text_root, SKILL_NAMES.0)? {
-            let display_name = entry.text.clone().unwrap_or_else(|| entry.key.clone());
+            let display_name = entry.display().unwrap_or_else(|| entry.key.clone());
             index
                 .passives
                 .insert(entry.key.clone(), PassiveSkill { id: entry.key, display_name });
         }
-        for entry in read_text_table(pak, &text_root, TECH_NAMES.0)? {
-            if let Some(id) = entry.key.strip_prefix(TECH_NAMES.1) {
-                if let Some(text) = entry.text {
-                    index.technologies.insert(id.to_owned(), text);
+
+        // Items and map objects must be read before technologies: most
+        // technology names are a bare indirection into one of those tables
+        // rather than literal text.
+        for entry in read_text_table(pak, &text_root, ITEM_NAMES.0)? {
+            if let Some(id) = entry.key.strip_prefix(ITEM_NAMES.1) {
+                if let Some(text) = entry.display() {
+                    index.items.insert(id.to_ascii_lowercase(), text);
                 }
             }
         }
-        for entry in read_text_table(pak, &text_root, ITEM_NAMES.0)? {
-            if let Some(id) = entry.key.strip_prefix(ITEM_NAMES.1) {
-                if let Some(text) = entry.text {
-                    index.items.insert(id.to_owned(), text);
+        for entry in read_text_table(pak, &text_root, MAP_OBJECT_NAMES.0)? {
+            if let Some(id) = entry.key.strip_prefix(MAP_OBJECT_NAMES.1) {
+                if let Some(text) = entry.display() {
+                    index.map_objects.insert(id.to_ascii_lowercase(), text);
                 }
+            }
+        }
+        for entry in read_text_table(pak, &text_root, TECH_NAMES.0)? {
+            let Some(id) = entry.key.strip_prefix(TECH_NAMES.1) else {
+                continue;
+            };
+            let resolved = match text_table::text_reference(&entry.source) {
+                Some(text_table::TextRef::Item(item_id)) => index.item(item_id).map(str::to_owned),
+                Some(text_table::TextRef::MapObject(obj_id)) => {
+                    index.map_object(obj_id).map(str::to_owned)
+                }
+                None => entry.display(),
+            };
+            if let Some(text) = resolved {
+                index.technologies.insert(id.to_ascii_lowercase(), text);
             }
         }
 
@@ -195,14 +217,30 @@ impl ReferenceIndex {
         self.items.len()
     }
 
+    /// Resolve a technology id (as stored in `UnlockedRecipeTechnologyNames`)
+    /// to its display name. Matched case-insensitively: saves store e.g.
+    /// `AIcore` while the text table keys it `NAME_RECIPE_AICORE`.
     #[must_use]
     pub fn technology(&self, id: &str) -> Option<&str> {
-        self.technologies.get(id).map(String::as_str)
+        self.technologies.get(&id.to_ascii_lowercase()).map(String::as_str)
+    }
+
+    /// Resolve an item id to its display name, case-insensitively.
+    #[must_use]
+    pub fn item(&self, id: &str) -> Option<&str> {
+        self.items.get(&id.to_ascii_lowercase()).map(String::as_str)
+    }
+
+    /// Resolve a buildable structure id to its display name,
+    /// case-insensitively.
+    #[must_use]
+    pub fn map_object(&self, id: &str) -> Option<&str> {
+        self.map_objects.get(&id.to_ascii_lowercase()).map(String::as_str)
     }
 
     #[must_use]
-    pub fn item(&self, id: &str) -> Option<&str> {
-        self.items.get(id).map(String::as_str)
+    pub fn map_object_count(&self) -> usize {
+        self.map_objects.len()
     }
 
     /// Whether `character_id` is a human NPC rather than a Pal.
@@ -292,8 +330,13 @@ impl crate::reference::ReferenceData for ReferenceIndex {
         self.species.get(&normalize_key(character_id))
     }
 
+    /// Accepts either the text-table key (`PASSIVE_CraftSpeed_up2`) or the
+    /// bare id as it appears in a save's `PassiveSkillList`
+    /// (`CraftSpeed_up2`), since callers naturally have the latter.
     fn passive(&self, id: &str) -> Option<&PassiveSkill> {
-        self.passives.get(id)
+        self.passives
+            .get(id)
+            .or_else(|| self.passives.get(&format!("{PASSIVE_KEY_PREFIX}{id}")))
     }
 
     /// Breeding combos live in an unversioned `DataTable` and remain
@@ -345,6 +388,26 @@ mod tests {
         assert!(!index.is_human_npc("Anubis"));
         assert!(!index.is_human_npc("BOSS_Anubis"));
         assert!(index.is_human_npc("Hunter_Rifle"));
+    }
+
+    /// Saves carry bare passive ids while the text table keys them with a
+    /// `PASSIVE_` prefix; both spellings must resolve.
+    #[test]
+    fn passives_resolve_with_or_without_the_table_prefix() {
+        use crate::reference::ReferenceData;
+
+        let mut index = ReferenceIndex::default();
+        index.passives.insert(
+            "PASSIVE_CraftSpeed_up2".into(),
+            PassiveSkill { id: "PASSIVE_CraftSpeed_up2".into(), display_name: "Artisan".into() },
+        );
+
+        assert_eq!(index.passive("CraftSpeed_up2").map(|p| p.display_name.as_str()), Some("Artisan"));
+        assert_eq!(
+            index.passive("PASSIVE_CraftSpeed_up2").map(|p| p.display_name.as_str()),
+            Some("Artisan")
+        );
+        assert!(index.passive("NotARealPassive").is_none());
     }
 
     /// A quest-only variant has no text row but is still a Pal, and must not

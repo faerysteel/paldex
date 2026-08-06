@@ -96,7 +96,8 @@ fn main() {
     println!("\n--- FString scan ---");
     let mut i = 0usize;
     let mut found = 0;
-    while i + 4 < uexp.len() && found < 40 {
+    let limit: usize = std::env::var("SCAN_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(40);
+    while i + 4 < uexp.len() && found < limit {
         let len = i32::from_le_bytes(uexp[i..i + 4].try_into().unwrap());
         if (2..=200).contains(&len) && i + 4 + len as usize <= uexp.len() {
             let raw = &uexp[i + 4..i + 4 + len as usize];

@@ -65,6 +65,8 @@ export interface PalView {
   nickname: string | null;
   locationKind: LocationKind;
   passives: string[];
+  /** Localized passive names, parallel to `passives`. */
+  passiveNames: string[];
   equippedMoves: string[];
   masteredMoves: string[];
 }
@@ -96,6 +98,8 @@ export interface BaseCampView {
 export interface PlayerFlagsView {
   playerUid: string;
   unlockedTech: string[];
+  /** Localized technology names, parallel to `unlockedTech`. */
+  unlockedTechNames: string[];
   normalBossDefeated: string[];
   towerBossDefeated: string[];
   specificBossDefeated: string[];

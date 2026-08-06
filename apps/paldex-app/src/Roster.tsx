@@ -72,6 +72,7 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
           (p) =>
             speciesLabel(p).toLowerCase().includes(needle) ||
             p.characterId.toLowerCase().includes(needle) ||
+            passiveLabels(p).some((n) => n.toLowerCase().includes(needle)) ||
             (p.nickname?.toLowerCase().includes(needle) ?? false),
         )
       : pals;
@@ -165,7 +166,9 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
                   </span>
                 </div>
                 <div className="world-meta" style={{ flexDirection: "column", alignItems: "flex-start", gap: "0.25rem" }}>
-                  <span>{f.unlockedTech.length} technologies unlocked</span>
+                  <span title={techLabels(f).join(", ")}>
+                    {f.unlockedTech.length} technologies unlocked
+                  </span>
                   <span>
                     {f.normalBossDefeated.length} normal · {f.towerBossDefeated.length} tower ·{" "}
                     {f.specificBossDefeated.length} named bosses defeated
@@ -229,7 +232,9 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
                   <td className="ivs">
                     {pal.ivHp}/{pal.ivShot}/{pal.ivDefense}
                   </td>
-                  <td className="muted passives">{pal.passives.join(", ")}</td>
+                  <td className="muted passives" title={pal.passives.join(", ")}>
+                    {passiveLabels(pal).join(", ")}
+                  </td>
                   <td className="muted">{locationLabel(pal.locationKind)}</td>
                   <td>
                     {pal.isLucky && <span className="badge badge-localWorld">Lucky</span>}
@@ -276,6 +281,24 @@ function SortableHeader({
 /** Display name when the game pak supplied one, else the raw internal id. */
 function speciesLabel(pal: PalView): string {
   return pal.displayName ?? pal.characterId;
+}
+
+/**
+ * Localized passive names, falling back to raw ids when no pak is available
+ * (in which case `passiveNames` is empty rather than parallel).
+ */
+function passiveLabels(pal: PalView): string[] {
+  return pal.passiveNames.length === pal.passives.length ? pal.passiveNames : pal.passives;
+}
+
+/**
+ * Localized technology names, falling back to raw ids when no pak is
+ * available (in which case `unlockedTechNames` is empty rather than parallel).
+ */
+function techLabels(flags: PlayerFlagsView): string[] {
+  return flags.unlockedTechNames.length === flags.unlockedTech.length
+    ? flags.unlockedTechNames
+    : flags.unlockedTech;
 }
 
 function ivAverage(pal: PalView): number {

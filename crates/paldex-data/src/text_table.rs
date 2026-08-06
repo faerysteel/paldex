@@ -27,15 +27,65 @@ use crate::uasset::{Reader, UassetError};
 /// Suffix Palworld appends to every text-table row key.
 const KEY_SUFFIX: &str = "_TextData";
 
-/// One resolved row of a text `DataTable`.
+/// One row of a text `DataTable`, as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEntry {
     /// Row key with the `_TextData` suffix stripped, e.g.
     /// `PAL_NAME_AmaterasuWolf`.
     pub key: String,
-    /// The localized string, or `None` when the row is an untranslated
-    /// placeholder (see [`is_placeholder`]).
-    pub text: Option<String>,
+    /// The raw source string, markup and placeholders intact. Callers decide
+    /// how to render it — [`TextEntry::display`] covers the common case, but
+    /// technology names in particular need [`text_reference`] resolved first.
+    pub source: String,
+}
+
+impl TextEntry {
+    /// The row's text ready for display, or `None` when it is an untranslated
+    /// placeholder or pure markup with nothing to show.
+    #[must_use]
+    pub fn display(&self) -> Option<String> {
+        let cleaned = strip_markup(&self.source);
+        (!is_placeholder(&cleaned)).then_some(cleaned)
+    }
+}
+
+/// A row that is a bare indirection into another text table rather than
+/// literal text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextRef<'a> {
+    /// `<itemName id=|X|/>` — resolve against the item name table.
+    Item(&'a str),
+    /// `<mapObjectName id=|X|/>` — resolve against the map object name table.
+    MapObject(&'a str),
+}
+
+/// Parse a row that is nothing but a reference to another table's entry.
+///
+/// Most technology names are indirections rather than literal text: item
+/// recipes point at the item name (`<itemName id=|AssaultRifle_Default1|/>`)
+/// and buildable structures at the map object name
+/// (`<mapObjectName id=|Altar|/>`). Stripping the markup leaves nothing, so
+/// these must be resolved rather than rendered.
+///
+/// The tag name is matched case-insensitively because the shipped data is
+/// inconsistent — the real pak contains both `<mapObjectName` and
+/// `<mapObjectname`.
+#[must_use]
+pub fn text_reference(source: &str) -> Option<TextRef<'_>> {
+    let inner = source.trim().strip_prefix('<')?.strip_suffix("/>")?;
+    let (tag, rest) = inner.split_once(char::is_whitespace)?;
+    let (_, after_id) = rest.split_once("id=")?;
+    let (id, tail) = after_id.trim().strip_prefix('|')?.split_once('|')?;
+    // Only a *bare* reference resolves this way; anything trailing means the
+    // row is mixed content and should be rendered as text.
+    if !tail.trim().is_empty() {
+        return None;
+    }
+    match tag.to_ascii_lowercase().as_str() {
+        "itemname" => Some(TextRef::Item(id)),
+        "mapobjectname" => Some(TextRef::MapObject(id)),
+        _ => None,
+    }
 }
 
 /// Whether a source string is one of the game's untranslated placeholders
@@ -64,11 +114,9 @@ pub fn is_placeholder(text: &str) -> bool {
 
 /// Strip Unreal rich-text markup, keeping the readable content.
 ///
-/// Some rows embed markup such as
-/// `<itemName id=|AssaultRifle_Default1|/>`, which the game resolves at
-/// display time. There is nothing to resolve it against here, so the tags are
-/// removed; a row that is *entirely* markup ends up empty and is reported as a
-/// placeholder.
+/// Rows can embed markup such as `<b>…</b>`. A row that is *entirely* markup
+/// ends up empty and is treated as a placeholder — see [`text_reference`] for
+/// the case where that emptiness is meaningful rather than a loss.
 #[must_use]
 pub fn strip_markup(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -115,9 +163,7 @@ pub fn parse(uexp: &[u8], namespace: &str) -> Result<Vec<TextEntry>, UassetError
             continue;
         }
 
-        let cleaned = strip_markup(&source);
-        let text = (!is_placeholder(&cleaned)).then_some(cleaned);
-        entries.push(TextEntry { key: key.to_owned(), text });
+        entries.push(TextEntry { key: key.to_owned(), source });
         search_from = r.pos();
     }
 
@@ -165,10 +211,11 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                TextEntry { key: "PAL_NAME_AmaterasuWolf".into(), text: Some("Kitsun".into()) },
-                TextEntry { key: "PAL_NAME_Anubis".into(), text: Some("Anubis".into()) },
+                TextEntry { key: "PAL_NAME_AmaterasuWolf".into(), source: "Kitsun".into() },
+                TextEntry { key: "PAL_NAME_Anubis".into(), source: "Anubis".into() },
             ]
         );
+        assert_eq!(rows[0].display(), Some("Kitsun".to_owned()));
     }
 
     /// Untranslated rows must come back as `None`, not as the literal
@@ -177,7 +224,7 @@ mod tests {
     fn untranslated_rows_report_no_text() {
         let buf = ftext_record("DT_T", "PAL_NAME_BeardedDragon_TextData", "en_text");
         let rows = parse(&buf, "DT_T").expect("parse");
-        assert_eq!(rows[0].text, None);
+        assert_eq!(rows[0].display(), None);
     }
 
     #[test]
@@ -188,6 +235,29 @@ mod tests {
         assert!(!is_placeholder("Kitsun"));
         assert!(!is_placeholder("Text"));
         assert!(!is_placeholder("Mau Cryst"));
+    }
+
+    /// Technology rows are mostly bare item references; they must be
+    /// recognized as such rather than stripped to nothing.
+    #[test]
+    fn detects_bare_table_references() {
+        assert_eq!(
+            text_reference("<itemName id=|AssaultRifle_Default1|/>"),
+            Some(TextRef::Item("AssaultRifle_Default1"))
+        );
+        assert_eq!(
+            text_reference("<mapObjectName id=|Altar|/>"),
+            Some(TextRef::MapObject("Altar"))
+        );
+        // The shipped data casts the tag inconsistently.
+        assert_eq!(
+            text_reference("<mapObjectname id=|AncientCookingStove|/>"),
+            Some(TextRef::MapObject("AncientCookingStove"))
+        );
+        assert_eq!(text_reference("Copper Smelting"), None);
+        // Mixed content is real text, not an indirection.
+        assert_eq!(text_reference("Craft a <itemName id=|Wood|/> plank"), None);
+        assert_eq!(text_reference("<unknownTag id=|X|/>"), None);
     }
 
     #[test]

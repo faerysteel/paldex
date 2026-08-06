@@ -30,6 +30,9 @@ pub struct PalView {
     pub nickname: Option<String>,
     pub location_kind: Option<String>,
     pub passives: Vec<String>,
+    /// Localized passive names, parallel to `passives`, falling back to the
+    /// raw id when unresolved. Empty when no game pak is available.
+    pub passive_names: Vec<String>,
     pub equipped_moves: Vec<String>,
     pub mastered_moves: Vec<String>,
 }
@@ -128,6 +131,7 @@ pub fn pal_roster(store: &Store, snapshot_id: i64) -> Result<Vec<PalView>, Strin
                 nickname: row.get(16)?,
                 location_kind: row.get(17)?,
                 passives: Vec::new(),
+                passive_names: Vec::new(),
                 equipped_moves: Vec::new(),
                 mastered_moves: Vec::new(),
             })
@@ -245,6 +249,9 @@ pub fn base_summary(store: &Store, snapshot_id: i64) -> Result<Vec<BaseCampView>
 pub struct PlayerFlagsView {
     pub player_uid: String,
     pub unlocked_tech: Vec<String>,
+    /// Localized technology names, parallel to `unlocked_tech`, falling back
+    /// to the raw id when unresolved. Empty when no game pak is available.
+    pub unlocked_tech_names: Vec<String>,
     pub normal_boss_defeated: Vec<String>,
     pub tower_boss_defeated: Vec<String>,
     pub specific_boss_defeated: Vec<String>,
@@ -285,6 +292,7 @@ pub fn player_flags_detail(store: &Store, snapshot_id: i64) -> Result<Vec<Player
         .map(|player_uid| {
             Ok(PlayerFlagsView {
                 unlocked_tech: keys_for(&player_uid, "unlocked_tech")?,
+                unlocked_tech_names: Vec::new(),
                 normal_boss_defeated: keys_for(&player_uid, "normal_boss_defeated")?,
                 tower_boss_defeated: keys_for(&player_uid, "tower_boss_defeated")?,
                 specific_boss_defeated: keys_for(&player_uid, "specific_boss_defeated")?,
