@@ -13,6 +13,8 @@ use std::fs::File;
 use std::io::{BufReader, Seek};
 use std::path::Path;
 
+mod reference;
+pub use reference::{PassiveSkill, PassthroughReferenceData, ReferenceData, Species};
 pub use repak_oodle::{PakBuilder, PakReader};
 
 #[derive(Debug, thiserror::Error)]
