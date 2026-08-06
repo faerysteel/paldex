@@ -439,14 +439,20 @@ mod tests {
         eprintln!("{}/{total} unlocked technologies resolved", total - unresolved.len());
         assert!(total > 0, "the real world has unlocked technologies");
 
-        // Not every unlocked "technology" is player-facing. Ids of the
-        // `Battle_Armor_Grade_01_Cloth` shape were checked against every
-        // English text table in the pak — technology names, technology
-        // descriptions, item names, item descriptions, lab research, build
-        // categories, UI strings — and appear in none of them, so there is no
-        // display name to find. The threshold covers the ones that do have
-        // names (item recipes and buildable structures), which is what the
-        // tech tree actually shows.
+        // The residual was classified against the real save rather than
+        // assumed (see `examples/classify_unresolved_tech.rs`). Of the
+        // distinct unlocked technologies that don't resolve:
+        //
+        // - The large majority have **no row** in the technology name table.
+        //   Ids of the `Battle_Armor_Grade_01_Cloth` shape were searched
+        //   across all 482 localized text tables in *every* shipped language
+        //   and appear in none of them — there is no display name to find.
+        // - Six have a row whose reference dangles in the game's own data:
+        //   `Glider_Tera` is not an item, and techs `GrapplingGun`..
+        //   `GrapplingGun5` point at item ids that are actually spelled
+        //   `GrapplingGun_1`..`_5`. Guessing past that mismatch would risk
+        //   attaching a confidently wrong name, so these keep their raw id.
+        // - None are untranslated placeholders.
         let resolved_pct = (total - unresolved.len()) * 100 / total;
         assert!(
             resolved_pct >= 75,
