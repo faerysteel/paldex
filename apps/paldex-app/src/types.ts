@@ -90,3 +90,15 @@ export interface BaseCampView {
   id: string;
   guildId: string | null;
 }
+
+export interface PlayerFlagsView {
+  playerUid: string;
+  unlockedTech: string[];
+  normalBossDefeated: string[];
+  towerBossDefeated: string[];
+  specificBossDefeated: string[];
+  completedQuests: string[];
+  relicsObtained: string[];
+  notesObtained: string[];
+  fastTravelUnlocked: string[];
+}

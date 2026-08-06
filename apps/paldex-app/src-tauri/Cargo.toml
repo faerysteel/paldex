@@ -21,6 +21,7 @@ paldex-sav.workspace = true
 paldex-gvas.workspace = true
 paldex-model.workspace = true
 paldex-store.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 serde.workspace = true
 serde_json.workspace = true

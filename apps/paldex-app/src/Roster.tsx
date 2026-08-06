@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   DexProgressView,
   PalView,
+  PlayerFlagsView,
   PlayerProgressView,
   SnapshotSummaryView,
 } from "./types";
@@ -22,6 +23,7 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
   const [pals, setPals] = useState<PalView[] | null>(null);
   const [dex, setDex] = useState<DexProgressView | null>(null);
   const [players, setPlayers] = useState<PlayerProgressView[] | null>(null);
+  const [playerFlags, setPlayerFlags] = useState<PlayerFlagsView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [resyncing, setResyncing] = useState(false);
   const [filter, setFilter] = useState("");
@@ -30,14 +32,16 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [palsResult, dexResult, playersResult] = await Promise.all([
+      const [palsResult, dexResult, playersResult, flagsResult] = await Promise.all([
         invoke<PalView[]>("pal_roster"),
         invoke<DexProgressView>("dex_progress"),
         invoke<PlayerProgressView[]>("player_progress"),
+        invoke<PlayerFlagsView[]>("player_flags_detail"),
       ]);
       setPals(palsResult);
       setDex(dexResult);
       setPlayers(playersResult);
+      setPlayerFlags(flagsResult);
     } catch (e) {
       setError(String(e));
     }
@@ -141,6 +145,35 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
                   <span>{p.bossTechPoints} boss tech pts</span>
                   <span>{p.mutationCount} mutations</span>
                   <span>{p.awakeningCount} awakenings</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {playerFlags && playerFlags.length > 0 && (
+        <details className="others">
+          <summary>Tech, bosses & quests</summary>
+          <ul className="worlds">
+            {playerFlags.map((f) => (
+              <li key={f.playerUid} className="world" style={{ alignItems: "flex-start" }}>
+                <div className="world-main">
+                  <span className="world-id" title={f.playerUid}>
+                    {f.playerUid.slice(0, 8)}
+                  </span>
+                </div>
+                <div className="world-meta" style={{ flexDirection: "column", alignItems: "flex-start", gap: "0.25rem" }}>
+                  <span>{f.unlockedTech.length} technologies unlocked</span>
+                  <span>
+                    {f.normalBossDefeated.length} normal · {f.towerBossDefeated.length} tower ·{" "}
+                    {f.specificBossDefeated.length} named bosses defeated
+                  </span>
+                  <span>{f.completedQuests.length} quests completed</span>
+                  <span>
+                    {f.relicsObtained.length} relics · {f.notesObtained.length} notes ·{" "}
+                    {f.fastTravelUnlocked.length} fast travel points
+                  </span>
                 </div>
               </li>
             ))}

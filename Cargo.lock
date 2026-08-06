@@ -2368,6 +2368,7 @@ dependencies = [
  "paldex-model",
  "paldex-sav",
  "paldex-store",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

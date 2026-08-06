@@ -225,3 +225,68 @@ pub fn base_summary(store: &Store, snapshot_id: i64) -> Result<Vec<BaseCampView>
         .map_err(|e| e.to_string())?;
     rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
 }
+
+/// World & player progress beyond the scalar counters `player_progress`
+/// already covers — tech tree, boss defeats, quest completion, collectibles
+/// — all of it already sitting in `player_flags` since Phase 4's ingest, just
+/// not queried back out until now. Base camp worker/storage detail isn't
+/// included: `BaseCampSaveData`'s bespoke binary format (see
+/// `paldex-model::rawdata::base_camp`'s docs) isn't decoded past id and
+/// guild ownership yet.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerFlagsView {
+    pub player_uid: String,
+    pub unlocked_tech: Vec<String>,
+    pub normal_boss_defeated: Vec<String>,
+    pub tower_boss_defeated: Vec<String>,
+    pub specific_boss_defeated: Vec<String>,
+    pub completed_quests: Vec<String>,
+    pub relics_obtained: Vec<String>,
+    pub notes_obtained: Vec<String>,
+    pub fast_travel_unlocked: Vec<String>,
+}
+
+pub fn player_flags_detail(store: &Store, snapshot_id: i64) -> Result<Vec<PlayerFlagsView>, String> {
+    let conn = store.conn();
+    let mut player_stmt = conn
+        .prepare("SELECT player_uid FROM players WHERE snapshot_id = ?1")
+        .map_err(|e| e.to_string())?;
+    let player_uids: Vec<String> = player_stmt
+        .query_map([snapshot_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let mut flag_stmt = conn
+        .prepare(
+            "SELECT flag_key FROM player_flags
+             WHERE snapshot_id = ?1 AND player_uid = ?2 AND flag_kind = ?3
+             ORDER BY flag_key",
+        )
+        .map_err(|e| e.to_string())?;
+    let mut keys_for = |player_uid: &str, kind: &str| -> Result<Vec<String>, String> {
+        flag_stmt
+            .query_map(rusqlite::params![snapshot_id, player_uid, kind], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())
+    };
+
+    player_uids
+        .into_iter()
+        .map(|player_uid| {
+            Ok(PlayerFlagsView {
+                unlocked_tech: keys_for(&player_uid, "unlocked_tech")?,
+                normal_boss_defeated: keys_for(&player_uid, "normal_boss_defeated")?,
+                tower_boss_defeated: keys_for(&player_uid, "tower_boss_defeated")?,
+                specific_boss_defeated: keys_for(&player_uid, "specific_boss_defeated")?,
+                completed_quests: keys_for(&player_uid, "completed_quest")?,
+                relics_obtained: keys_for(&player_uid, "relic_obtained")?,
+                notes_obtained: keys_for(&player_uid, "note_obtained")?,
+                fast_travel_unlocked: keys_for(&player_uid, "fast_travel_unlocked")?,
+                player_uid,
+            })
+        })
+        .collect()
+}

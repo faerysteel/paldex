@@ -212,3 +212,19 @@ pub fn base_summary(app: AppHandle, state: State<AppState>) -> Result<Vec<BaseCa
     let snapshot_id = selected_snapshot_id(&state)?;
     with_store(&app, &state, |store| queries::base_summary(store, snapshot_id))
 }
+
+/// Per-player tech/boss/quest/collectible detail for the currently selected
+/// world's latest snapshot — the rest of `PlayerProgress` beyond
+/// `player_progress`'s scalar counters.
+///
+/// # Errors
+///
+/// A display-ready message if no world is selected, or the query fails.
+#[tauri::command]
+pub fn player_flags_detail(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<Vec<queries::PlayerFlagsView>, String> {
+    let snapshot_id = selected_snapshot_id(&state)?;
+    with_store(&app, &state, |store| queries::player_flags_detail(store, snapshot_id))
+}

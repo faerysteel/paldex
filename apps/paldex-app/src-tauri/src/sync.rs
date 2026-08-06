@@ -186,5 +186,17 @@ mod tests {
 
         let bases = crate::queries::base_summary(&store, snapshot_id).expect("base_summary");
         eprintln!("{} base camps", bases.len());
+
+        let flags = crate::queries::player_flags_detail(&store, snapshot_id).expect("player_flags_detail");
+        assert_eq!(flags.len() as i64, summary.player_count);
+        for f in &flags {
+            eprintln!(
+                "  player {}: {} tech, {} normal bosses, {} quests",
+                &f.player_uid[..8.min(f.player_uid.len())],
+                f.unlocked_tech.len(),
+                f.normal_boss_defeated.len(),
+                f.completed_quests.len(),
+            );
+        }
     }
 }
