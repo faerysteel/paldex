@@ -1,0 +1,27 @@
+[package]
+name = "repak-oodle"
+description = "Vendored trumank/repak (MIT/Apache-2.0), patched to decompress Oodle via oozextract instead of the native oo2core DLL loader"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["compression", "encryption"]
+compression = ["dep:flate2", "dep:zstd", "dep:lz4_flex"]
+encryption = ["dep:aes"]
+
+[dependencies]
+byteorder = "1.5"
+aes = { version = "0.8.4", optional = true }
+flate2 = { version = "1.1", optional = true }
+zstd = { version = "0.13", optional = true }
+lz4_flex = { version = "0.12.0", optional = true }
+oozextract = "0.5"
+thiserror.workspace = true
+sha1 = "0.10"
+strum = { version = "0.27", features = ["derive"] }
+hex = "0.4"
+
+[lints]
+workspace = true
