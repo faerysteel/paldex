@@ -1,9 +1,10 @@
 //! Commands exposed to the frontend.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
-use paldex_locate::{discover, resolve_manual, SaveRoot, World};
+use paldex_data::{Pak, ReferenceData, ReferenceIndex};
+use paldex_locate::{discover, discover_paks, resolve_manual, SaveRoot, World};
 use paldex_store::Store;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -18,6 +19,33 @@ use crate::sync;
 pub struct AppState {
     store: Mutex<Option<Store>>,
     selected: Mutex<Option<SelectedWorld>>,
+    /// Reference data from the installed game pak, loaded once on first use.
+    /// The inner `None` means no pak was found — the app stays usable without
+    /// the game installed, just with internal ids instead of display names.
+    reference: OnceLock<Option<ReferenceIndex>>,
+}
+
+impl AppState {
+    fn reference(&self) -> Option<&ReferenceIndex> {
+        self.reference.get_or_init(load_reference).as_ref()
+    }
+}
+
+/// Open the first discoverable game pak and extract reference data from it.
+///
+/// Failure is never fatal: a missing or unreadable pak degrades the UI to raw
+/// ids rather than breaking it.
+fn load_reference() -> Option<ReferenceIndex> {
+    for path in discover_paks() {
+        let Ok(mut pak) = Pak::open(&path) else {
+            continue;
+        };
+        match ReferenceIndex::extract(&mut pak, "en") {
+            Ok(index) => return Some(index),
+            Err(e) => eprintln!("reference extraction failed for {}: {e}", path.display()),
+        }
+    }
+    None
 }
 
 struct SelectedWorld {
@@ -168,7 +196,13 @@ pub fn force_resync(app: AppHandle, state: State<AppState>) -> Result<SnapshotSu
     with_store(&app, &state, |store| queries::snapshot_summary(store, snapshot_id))
 }
 
-/// The currently selected world's full Pal roster.
+/// The currently selected world's Pal roster, with localized species names.
+///
+/// Human NPCs are excluded: the save gives them the same shape as Pals (they
+/// carry full IV stats), so Phase 2 can't tell them apart and they would
+/// otherwise show up as roster entries. The pak can — see `paldex-data`'s
+/// reference docs. Without a pak nothing is filtered or renamed, which is the
+/// pre-existing behaviour.
 ///
 /// # Errors
 ///
@@ -176,7 +210,44 @@ pub fn force_resync(app: AppHandle, state: State<AppState>) -> Result<SnapshotSu
 #[tauri::command]
 pub fn pal_roster(app: AppHandle, state: State<AppState>) -> Result<Vec<PalView>, String> {
     let snapshot_id = selected_snapshot_id(&state)?;
-    with_store(&app, &state, |store| queries::pal_roster(store, snapshot_id))
+    let mut roster = with_store(&app, &state, |store| queries::pal_roster(store, snapshot_id))?;
+
+    if let Some(reference) = state.reference() {
+        enrich_roster(&mut roster, reference);
+    }
+    Ok(roster)
+}
+
+/// Drop human NPCs and attach localized species names.
+fn enrich_roster(roster: &mut Vec<PalView>, reference: &ReferenceIndex) {
+    roster.retain(|pal| !reference.is_human_npc(&pal.character_id));
+    for pal in roster.iter_mut() {
+        pal.display_name = reference
+            .species(&pal.character_id)
+            .map(|s| s.display_name.clone());
+    }
+}
+
+/// Whether pak-derived reference data is available, so the UI can explain why
+/// species show as internal ids when it isn't.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceStatusView {
+    pub available: bool,
+    pub language: Option<String>,
+    pub species_count: usize,
+}
+
+#[tauri::command]
+pub fn reference_status(state: State<AppState>) -> ReferenceStatusView {
+    match state.reference() {
+        Some(index) => ReferenceStatusView {
+            available: true,
+            language: Some(index.language().to_owned()),
+            species_count: index.species_count(),
+        },
+        None => ReferenceStatusView { available: false, language: None, species_count: 0 },
+    }
 }
 
 /// The currently selected world's dex progress (species unlocked by any
@@ -227,4 +298,61 @@ pub fn player_flags_detail(
 ) -> Result<Vec<queries::PlayerFlagsView>, String> {
     let snapshot_id = selected_snapshot_id(&state)?;
     with_store(&app, &state, |store| queries::player_flags_detail(store, snapshot_id))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Exercises roster enrichment against the real save *and* the real pak
+    //! together — the join neither crate can test on its own.
+    use super::*;
+    use paldex_locate::World;
+
+    fn real_roster() -> Option<Vec<PalView>> {
+        let world = if let Ok(dir) = std::env::var("PALDEX_TEST_SAVE_DIR") {
+            resolve_manual(std::path::Path::new(&dir))
+                .ok()?
+                .into_iter()
+                .find_map(|r| r.worlds().into_iter().find(World::is_trackable))?
+        } else {
+            discover()
+                .into_iter()
+                .find_map(|r| r.worlds().into_iter().find(World::is_trackable))?
+        };
+        let mut store = Store::open_in_memory().ok()?;
+        let snapshot_id = crate::sync::sync_world(&mut store, &world).ok()?;
+        queries::pal_roster(&store, snapshot_id).ok()
+    }
+
+    #[test]
+    fn enrichment_names_species_and_drops_human_npcs() {
+        let (Some(mut roster), Some(reference)) = (real_roster(), load_reference()) else {
+            eprintln!("skipping: need both a real save and the game pak");
+            return;
+        };
+
+        let before = roster.len();
+        let npcs = roster.iter().filter(|p| reference.is_human_npc(&p.character_id)).count();
+        enrich_roster(&mut roster, &reference);
+        eprintln!("roster {before} -> {} ({npcs} human NPCs removed)", roster.len());
+
+        assert_eq!(roster.len(), before - npcs);
+        assert!(npcs > 0, "the real world is known to contain human NPCs");
+        assert!(
+            roster.iter().all(|p| !reference.is_human_npc(&p.character_id)),
+            "no human NPC should survive filtering"
+        );
+
+        // The point of the whole exercise: real names, not internal ids.
+        let named = roster.iter().filter(|p| p.display_name.is_some()).count();
+        eprintln!("{named}/{} entries have a display name", roster.len());
+        assert!(
+            named * 100 / roster.len().max(1) >= 95,
+            "expected nearly every Pal to resolve a display name, got {named}/{}",
+            roster.len()
+        );
+        assert!(
+            roster.iter().any(|p| p.display_name.as_deref() != Some(p.character_id.as_str())),
+            "display names should differ from internal ids for at least some Pals"
+        );
+    }
 }

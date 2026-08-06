@@ -21,6 +21,7 @@ pub fn run() {
             commands::player_progress,
             commands::base_summary,
             commands::player_flags_detail,
+            commands::reference_status,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Paldex");

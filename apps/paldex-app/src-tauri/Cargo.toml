@@ -16,6 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+paldex-data.workspace = true
 paldex-locate.workspace = true
 paldex-sav.workspace = true
 paldex-gvas.workspace = true

@@ -9,6 +9,10 @@ use serde::Serialize;
 pub struct PalView {
     pub instance_id: String,
     pub character_id: String,
+    /// Localized species name from the game pak, e.g. `Kitsun` for
+    /// `AmaterasuWolf`. `None` when the pak isn't available, in which case the
+    /// UI falls back to `character_id`.
+    pub display_name: Option<String>,
     pub owner: Option<String>,
     pub level: i64,
     pub rank: i64,
@@ -104,6 +108,9 @@ pub fn pal_roster(store: &Store, snapshot_id: i64) -> Result<Vec<PalView>, Strin
             Ok(PalView {
                 instance_id: row.get(0)?,
                 character_id: row.get(1)?,
+                // Filled in by the command layer, which owns the pak-derived
+                // reference data; this layer stays pure SQL.
+                display_name: None,
                 owner: row.get(2)?,
                 level: row.get(3)?,
                 rank: row.get(4)?,

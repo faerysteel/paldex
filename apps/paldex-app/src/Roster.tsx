@@ -70,6 +70,7 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
     const matches = needle
       ? pals.filter(
           (p) =>
+            speciesLabel(p).toLowerCase().includes(needle) ||
             p.characterId.toLowerCase().includes(needle) ||
             (p.nickname?.toLowerCase().includes(needle) ?? false),
         )
@@ -78,7 +79,7 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
       const dir = sort.direction === "asc" ? 1 : -1;
       switch (sort.column) {
         case "characterId":
-          return dir * a.characterId.localeCompare(b.characterId);
+          return dir * speciesLabel(a).localeCompare(speciesLabel(b));
         case "level":
           return dir * (a.level - b.level);
         case "rank":
@@ -218,7 +219,9 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
             <tbody>
               {filtered.map((pal) => (
                 <tr key={pal.instanceId}>
-                  <td className="species">{pal.characterId}</td>
+                  <td className="species" title={pal.characterId}>
+                    {speciesLabel(pal)}
+                  </td>
                   <td className="muted">{pal.nickname ?? ""}</td>
                   <td>{pal.level}</td>
                   <td>{pal.rank}</td>
@@ -268,6 +271,11 @@ function SortableHeader({
       {active && (sort.direction === "asc" ? " ▲" : " ▼")}
     </th>
   );
+}
+
+/** Display name when the game pak supplied one, else the raw internal id. */
+function speciesLabel(pal: PalView): string {
+  return pal.displayName ?? pal.characterId;
 }
 
 function ivAverage(pal: PalView): number {

@@ -110,6 +110,59 @@ pub fn discover() -> Vec<SaveRoot> {
     roots
 }
 
+/// Path from a Steam library root down to the game pak.
+const PAK_TAIL: &[&str] = &[
+    "steamapps",
+    "common",
+    "Palworld",
+    "Pal",
+    "Content",
+    "Paks",
+    "Pal-Windows.pak",
+];
+
+/// Locate the installed game pak, which holds the reference data (species
+/// names, skills, technologies, items).
+///
+/// Returns every candidate, newest-looking first is not meaningful here — the
+/// caller should just take the first that opens. Never fails: a machine
+/// without the game installed is a normal case, and the app must still run
+/// without reference data.
+#[must_use]
+pub fn discover_paks() -> Vec<PathBuf> {
+    let mut paks = Vec::new();
+
+    if cfg!(target_os = "macos") {
+        for (bottles_dir, _) in wine_bottle_dirs() {
+            for bottle in subdirs(&bottles_dir) {
+                let drive_c = bottle.join("drive_c");
+                paks.extend(scan_steam_libraries(&drive_c.join("Program Files (x86)/Steam")));
+                paks.extend(scan_steam_libraries(&drive_c.join("Program Files/Steam")));
+            }
+        }
+    }
+
+    if cfg!(target_os = "windows") {
+        for root in ["C:/Program Files (x86)/Steam", "C:/Program Files/Steam"] {
+            paks.extend(scan_steam_libraries(Path::new(root)));
+        }
+    }
+
+    paks.sort();
+    paks.dedup();
+    paks
+}
+
+/// Check a Steam install root for the pak.
+fn scan_steam_libraries(steam_root: &Path) -> Vec<PathBuf> {
+    let candidate = PAK_TAIL.iter().fold(steam_root.to_path_buf(), |p, c| p.join(c));
+    if candidate.is_file() {
+        vec![candidate]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Container directories that hold Wine bottles, paired with whether they are Whisky.
 ///
 /// Returns nothing off macOS.
@@ -268,6 +321,17 @@ fn dir_name(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pak_tail_matches_the_documented_install_layout() {
+        let joined = PAK_TAIL.iter().fold(PathBuf::from("/steam"), |p, c| p.join(c));
+        assert!(joined.ends_with("steamapps/common/Palworld/Pal/Content/Paks/Pal-Windows.pak"));
+    }
+
+    #[test]
+    fn pak_discovery_skips_missing_installs() {
+        assert!(scan_steam_libraries(Path::new("/nonexistent/steam")).is_empty());
+    }
 
     #[test]
     fn save_tail_matches_the_documented_layout() {

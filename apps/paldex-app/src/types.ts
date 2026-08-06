@@ -46,6 +46,8 @@ export type LocationKind = "party" | "box" | "other" | null;
 export interface PalView {
   instanceId: string;
   characterId: string;
+  /** Localized species name from the game pak; null when no pak was found. */
+  displayName: string | null;
   owner: string | null;
   level: number;
   rank: number;
