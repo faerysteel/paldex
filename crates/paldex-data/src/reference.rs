@@ -50,10 +50,12 @@
 //!
 //! Numeric and relational data genuinely needs the schema: base stats,
 //! elements, work suitabilities, dex numbers ([`Species::dex_number`] is
-//! always `None`), rarity, and breeding combos. Icon *textures* are present in
-//! the pak at `Pal/Content/Pal/Texture/PalIcon/` (with human NPCs in their own
-//! `NPC/` subfolder) and don't need a schema to locate, but do need BC/DXT
-//! decoding plus `.ubulk` handling, which isn't implemented yet.
+//! always `None`), rarity, and breeding combos.
+//!
+//! Icons are **not** in that category — see [`crate::texture`]. A cooked
+//! texture writes its pixel format as a plain `FString`, which is enough to
+//! locate `FTexturePlatformData` and its mips without a schema, so artwork
+//! comes from the local pak as the plan intended.
 //!
 //! [`PassthroughReferenceData`] is retained for tests and for the case where
 //! no pak is available (the app must still run without the game installed).
@@ -76,7 +78,16 @@ pub trait ReferenceData {
     fn species(&self, character_id: &str) -> Option<&Species>;
     fn passive(&self, id: &str) -> Option<&PassiveSkill>;
     fn breeding_result(&self, a: &str, b: &str) -> Option<&str>;
-    fn icon(&self, character_id: &str) -> Option<&[u8]>;
+
+    /// The pak entry holding this species' icon, without its file extension.
+    ///
+    /// Deliberately a *path* rather than the plan's original
+    /// `icon(&self) -> Option<&[u8]>`. Returning borrowed bytes would force
+    /// every icon to be decoded and held up front — 424 textures, each a
+    /// block-decompress plus a PNG encode — when a session typically views a
+    /// handful. Callers pair this with [`crate::load_icon_png`] to decode on
+    /// demand and cache.
+    fn icon_path(&self, character_id: &str) -> Option<&str>;
 }
 
 /// A stub [`ReferenceData`] with no real data behind it — `species`/`passive`
@@ -100,7 +111,7 @@ impl ReferenceData for PassthroughReferenceData {
         None
     }
 
-    fn icon(&self, _character_id: &str) -> Option<&[u8]> {
+    fn icon_path(&self, _character_id: &str) -> Option<&str> {
         None
     }
 }

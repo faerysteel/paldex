@@ -2386,6 +2386,7 @@ dependencies = [
  "paldex-locate",
  "paldex-model",
  "paldex-sav",
+ "png 0.17.16",
  "repak-oodle",
  "thiserror 2.0.19",
 ]

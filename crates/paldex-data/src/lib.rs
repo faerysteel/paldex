@@ -16,6 +16,7 @@ use std::path::Path;
 mod extract;
 mod reference;
 pub mod text_table;
+pub mod texture;
 pub mod uasset;
 pub use extract::{ExtractError, ReferenceIndex, TEXT_LANGUAGES};
 pub use reference::{PassiveSkill, PassthroughReferenceData, ReferenceData, Species};
@@ -37,6 +38,35 @@ pub enum PakError {
         #[source]
         source: repak_oodle::Error,
     },
+}
+
+/// Decode a texture from the pak into a PNG.
+///
+/// `base` is a pak entry path without its extension, as returned by
+/// [`ReferenceData::icon_path`]. Mip 0 usually lives in a sibling `.ubulk`,
+/// which is read when present.
+///
+/// # Errors
+///
+/// Fails if the entries can't be read, the texture can't be located, or its
+/// pixel format isn't one of the supported block-compressed formats.
+pub fn load_icon_png(pak: &mut Pak, base: &str) -> Result<Vec<u8>, IconError> {
+    let uexp = pak.read(&format!("{base}.uexp"))?;
+    // Absent `.ubulk` is normal: small textures inline every mip.
+    let ubulk = pak.read(&format!("{base}.ubulk")).ok();
+
+    let info = texture::parse(&uexp)?;
+    let data = texture::mip0_bytes(&info, &uexp, ubulk.as_deref())?;
+    let rgba = texture::decode_rgba(&info, data)?;
+    Ok(texture::encode_png(info.width, info.height, &rgba)?)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum IconError {
+    #[error(transparent)]
+    Pak(#[from] PakError),
+    #[error(transparent)]
+    Texture(#[from] texture::TextureError),
 }
 
 /// An opened pak archive, ready for path-based entry lookups.

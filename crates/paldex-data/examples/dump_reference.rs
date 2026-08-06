@@ -23,6 +23,8 @@ fn main() {
     println!("passives:     {}", index.passive_count());
     println!("technologies: {}", index.technology_count());
     println!("items:        {}", index.item_count());
+    println!("map objects:  {}", index.map_object_count());
+    println!("icons:        {}", index.icon_count());
 
     println!("\n--- spot checks ---");
     for id in [
@@ -37,6 +39,11 @@ fn main() {
             Some(s) => println!("  {id:24} -> {}", s.display_name),
             None => println!("  {id:24} -> (unresolved)"),
         }
+    }
+
+    println!("\n--- icon paths ---");
+    for id in ["SheepBall", "BOSS_SheepBall", "PinkCat", "AmaterasuWolf"] {
+        println!("  {id:20} -> {:?}", index.icon_path(id));
     }
 
     println!("\n--- NPC classification ---");

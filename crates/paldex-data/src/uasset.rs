@@ -87,6 +87,11 @@ impl<'a> Reader<'a> {
         Ok(self.u32()? as i32)
     }
 
+    pub(crate) fn i64(&mut self) -> Result<i64, UassetError> {
+        let b = self.take(8)?;
+        Ok(i64::from_le_bytes(b.try_into().expect("took exactly 8 bytes")))
+    }
+
     pub(crate) fn skip(&mut self, n: usize) -> Result<(), UassetError> {
         self.take(n).map(|_| ())
     }

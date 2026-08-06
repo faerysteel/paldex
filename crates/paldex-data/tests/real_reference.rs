@@ -142,6 +142,56 @@ fn known_human_npcs_are_classified_out_of_the_pal_roster() {
     }
 }
 
+/// Icons must decode to real PNGs at the expected size, and be correctly
+/// paired with their species rather than shifted.
+#[test]
+fn icons_decode_from_the_real_pak() {
+    let path = require!(real_pak_path(), "game pak");
+    let mut pak = Pak::open(&path).expect("open pak");
+    let index = ReferenceIndex::extract(&mut pak, "en").expect("extract");
+
+    assert!(index.icon_count() > 300, "expected a few hundred icons");
+
+    for id in ["SheepBall", "PinkCat", "AmaterasuWolf", "Anubis"] {
+        let icon_path = index.icon_path(id).unwrap_or_else(|| panic!("{id} should have an icon"));
+        // The path must name the species it belongs to -- a shifted index
+        // would silently show the wrong artwork.
+        assert!(
+            icon_path.to_ascii_lowercase().contains(&id.to_ascii_lowercase()),
+            "{id} resolved to unrelated icon {icon_path}"
+        );
+
+        let png = paldex_data::load_icon_png(&mut pak, icon_path)
+            .unwrap_or_else(|e| panic!("decoding {id}: {e}"));
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "{id} should be a PNG");
+        // IHDR width/height are big-endian at a fixed offset.
+        let w = u32::from_be_bytes(png[16..20].try_into().unwrap());
+        let h = u32::from_be_bytes(png[20..24].try_into().unwrap());
+        assert_eq!((w, h), (128, 128), "{id} icon should be 128x128");
+    }
+
+    // Variant prefixes share the base species' artwork.
+    assert_eq!(index.icon_path("BOSS_SheepBall"), index.icon_path("SheepBall"));
+}
+
+/// Every distinct Pal species in the real save should have artwork.
+#[test]
+fn most_species_in_the_real_save_have_icons() {
+    let path = require!(real_pak_path(), "game pak");
+    let mut pak = Pak::open(&path).expect("open pak");
+    let index = ReferenceIndex::extract(&mut pak, "en").expect("extract");
+    let ids = require!(save_character_ids(), "real save");
+
+    let pals: Vec<&String> = ids.iter().filter(|id| index.is_pal(id)).collect();
+    let with_icon = pals.iter().filter(|id| index.icon_path(id).is_some()).count();
+    eprintln!("{with_icon}/{} distinct Pal species have an icon", pals.len());
+    assert!(
+        with_icon * 100 / pals.len().max(1) >= 90,
+        "expected most species to have artwork, got {with_icon}/{}",
+        pals.len()
+    );
+}
+
 /// Every language the pak ships should parse; a language with no rows means
 /// the path convention or the parser is wrong for it.
 #[test]

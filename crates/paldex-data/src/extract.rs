@@ -69,6 +69,12 @@ const TECH_NAMES: (&str, &str) = ("DT_TechnologyNameText_Common", "NAME_RECIPE_"
 const ITEM_NAMES: (&str, &str) = ("DT_ItemNameText_Common", "ITEM_NAME_");
 const MAP_OBJECT_NAMES: (&str, &str) = ("DT_MapObjectNameText_Common", "MAPOBJECT_NAME_");
 
+/// Pal icon textures. The sibling `NPC/` and `SKin/` folders hold human-NPC
+/// portraits and cosmetic skins, neither of which is a species icon.
+const ICON_DIR: &str = "Pal/Content/Pal/Texture/PalIcon/Normal/";
+const ICON_PREFIX: &str = "T_";
+const ICON_SUFFIX: &str = "_icon_normal";
+
 /// Saves store passive ids bare; the skill text table prefixes them.
 const PASSIVE_KEY_PREFIX: &str = "PASSIVE_";
 
@@ -102,6 +108,8 @@ pub struct ReferenceIndex {
     items: HashMap<String, String>,
     map_objects: HashMap<String, String>,
     human_npc_ids: HashSet<String>,
+    /// Species key -> pak entry base path (no extension) for its icon.
+    icon_paths: HashMap<String, String>,
     language: String,
 }
 
@@ -111,6 +119,7 @@ impl ReferenceIndex {
     pub fn extract(pak: &mut Pak, language: &str) -> Result<Self, ExtractError> {
         let mut index = Self { language: language.to_owned(), ..Default::default() };
 
+        index.icon_paths = index_icons(pak);
         index.pal_keys = row_name_candidates(pak, MONSTER_PARAMS)?;
         index.human_npc_ids = row_name_candidates(pak, HUMAN_PARAMS)?;
 
@@ -243,6 +252,11 @@ impl ReferenceIndex {
         self.map_objects.len()
     }
 
+    #[must_use]
+    pub fn icon_count(&self) -> usize {
+        self.icon_paths.len()
+    }
+
     /// Whether `character_id` is a human NPC rather than a Pal.
     ///
     /// Phase 2 classifies characters as Player-vs-Pal only, because the save
@@ -295,6 +309,31 @@ fn normalize_key(character_id: &str) -> String {
     lower
 }
 
+/// Map species keys to their icon texture's pak entry.
+///
+/// Entries are named `T_<CharacterID>_icon_normal`; matching is
+/// case-insensitive because the pak is inconsistent about it elsewhere.
+fn index_icons(pak: &Pak) -> HashMap<String, String> {
+    let mut icons = HashMap::new();
+    for path in pak.files() {
+        let Some(stem) = path.strip_prefix(ICON_DIR).and_then(|p| p.strip_suffix(".uasset")) else {
+            continue;
+        };
+        let Some(rest) = stem.strip_prefix(ICON_PREFIX) else {
+            continue;
+        };
+        if rest.len() <= ICON_SUFFIX.len() {
+            continue;
+        }
+        let (id, suffix) = rest.split_at(rest.len() - ICON_SUFFIX.len());
+        if !suffix.eq_ignore_ascii_case(ICON_SUFFIX) {
+            continue;
+        }
+        icons.insert(normalize_key(id), format!("{ICON_DIR}{stem}"));
+    }
+    icons
+}
+
 /// Read the name tables of a set of cooked packages, which for a `DataTable`
 /// contain its row names (plus other referenced `FName`s — a superset, which
 /// is fine for membership tests).
@@ -345,10 +384,8 @@ impl crate::reference::ReferenceData for ReferenceIndex {
         None
     }
 
-    /// Icon textures are present in the pak but not yet decoded — see
-    /// [`crate::reference`].
-    fn icon(&self, _character_id: &str) -> Option<&[u8]> {
-        None
+    fn icon_path(&self, character_id: &str) -> Option<&str> {
+        self.icon_paths.get(&normalize_key(character_id)).map(String::as_str)
     }
 }
 
