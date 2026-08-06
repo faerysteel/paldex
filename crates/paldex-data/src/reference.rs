@@ -4,40 +4,59 @@
 //! "the UI depends only on this trait, so swapping the fallback in is a
 //! one-line change."
 //!
-//! ## Status: interface only, no full implementation yet
+//! ## Status: names and classification are real; numeric stats are not
 //!
-//! [`Pak::open`]/[`Pak::read`] (see `lib.rs`) prove the pak itself is fully
-//! readable — verified against the real 40 GB `Pal-Windows.pak`: index parses,
-//! every sampled entry decompresses, `DT_PalMonsterParameter.uasset` reads
-//! clean. What's *not* done is deserializing that uasset's `DataTable` rows
-//! into actual species data.
+//! [`crate::ReferenceIndex`] is the real implementation, built from the user's
+//! own installed pak. What it does and doesn't cover follows from one fact
+//! about how the game ships its data.
 //!
-//! Confirmed empirically (`FPackageFileSummary.FileVersionUE4` and
-//! `FileVersionUE5` both read `0` on the real file): this is a cooked,
-//! **unversioned** package, exactly the risk the plan's research flagged in
-//! advance. Unversioned `DataTable` rows need a `.usmap` property-schema
-//! mapping to deserialize at all — the row bytes alone don't carry enough
-//! information to know which bytes are which field. No `.usmap` exists in
-//! this repo or environment, and generating one requires either a published
-//! community mapping for this exact game build or running UE4SS's dumper
-//! against the live game (a manual, per-user, per-patch step). Writing a
-//! from-scratch unversioned-property deserializer without one is not a
-//! tractable addition here — it's comparable in scope to a meaningful chunk
-//! of CUE4Parse itself.
+//! ### The constraint
 //!
-//! The plan pre-approved exactly this situation's fallback ("no
-//! mid-implementation decision needed"): stats/combos from a vendored
-//! community dataset (e.g. `PalworldDataTools/PalworldDataExtractor`'s
-//! output), artwork still from the local pak (`T_PalIcon_*` textures don't
-//! need a property schema, just standard DXT/BC decoding — more tractable,
-//! not yet implemented either). Populating that dataset is left as an
-//! explicit next step rather than fabricated here: it means pulling in
-//! specific third-party data, which is a provenance/licensing choice worth
-//! the user's eyes before it lands in the repo.
+//! Palworld's `DataTable` packages are cooked with
+//! `PKG_UnversionedProperties` set — confirmed by reading the flag directly
+//! off the real `DT_PalMonsterParameter.uasset`
+//! (`PackageFlags = 0x80002200`), and corroborated by its name table
+//! containing no field names at all (no `HP`, no `ZukanIndex`). Unversioned
+//! rows identify their properties positionally against the compiled class
+//! schema, so deserializing them needs a `.usmap` mapping file. None ships in
+//! the pak (checked: zero `.usmap` entries in all 185,003), none exists for
+//! this build, and generating one means running UE4SS against the live game —
+//! a manual, per-user, per-patch step. Writing an unversioned-property
+//! deserializer without a schema is not tractable; it is comparable in scope
+//! to a meaningful chunk of CUE4Parse.
 //!
-//! [`PassthroughReferenceData`] keeps every dependent layer (the SQLite
-//! store, the roster UI) compiling and testable against the real interface
-//! shape in the meantime.
+//! ### What is obtainable anyway
+//!
+//! Two kinds of data escape that constraint, because neither depends on the
+//! row schema:
+//!
+//! - **Name tables** are plain `FString`s in every cooked package. This gives
+//!   the full Pal species key set from `DT_PalMonsterParameter` and the human
+//!   key set from `DT_PalHumanParameter` — which is what finally lets human
+//!   NPCs be filtered out of the Pal roster, the classification Phase 2
+//!   deferred to here.
+//! - **Localized text** is stored as `FText`, three plain `FString`s
+//!   (namespace, key, source), so [`crate::text_table`] reads it directly.
+//!   Palworld's `Game.locres` files are empty; all text lives in per-language
+//!   `DataTable`s. This yields real display names for species, skills,
+//!   technologies, items, and map objects in all 17 shipped languages.
+//!
+//! Everything comes from the user's own installation at runtime, so no game
+//! assets are redistributed and — notably — the plan's pre-agreed fallback of
+//! vendoring a third-party dataset was **not needed** for any of it, avoiding
+//! that provenance/licensing decision entirely.
+//!
+//! ### Still missing
+//!
+//! Numeric and relational data genuinely needs the schema: base stats,
+//! elements, work suitabilities, dex numbers ([`Species::dex_number`] is
+//! always `None`), rarity, and breeding combos. Icon *textures* are present in
+//! the pak at `Pal/Content/Pal/Texture/PalIcon/` (with human NPCs in their own
+//! `NPC/` subfolder) and don't need a schema to locate, but do need BC/DXT
+//! decoding plus `.ubulk` handling, which isn't implemented yet.
+//!
+//! [`PassthroughReferenceData`] is retained for tests and for the case where
+//! no pak is available (the app must still run without the game installed).
 
 /// A Pal species' static reference data.
 #[derive(Debug, Clone, PartialEq)]

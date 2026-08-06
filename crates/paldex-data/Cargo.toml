@@ -10,5 +10,11 @@ repository.workspace = true
 repak-oodle.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+paldex-gvas.workspace = true
+paldex-locate.workspace = true
+paldex-model.workspace = true
+paldex-sav.workspace = true
+
 [lints]
 workspace = true

@@ -2381,6 +2381,10 @@ dependencies = [
 name = "paldex-data"
 version = "0.1.0"
 dependencies = [
+ "paldex-gvas",
+ "paldex-locate",
+ "paldex-model",
+ "paldex-sav",
  "repak-oodle",
  "thiserror 2.0.19",
 ]

@@ -13,7 +13,11 @@ use std::fs::File;
 use std::io::{BufReader, Seek};
 use std::path::Path;
 
+mod extract;
 mod reference;
+pub mod text_table;
+pub mod uasset;
+pub use extract::{ExtractError, ReferenceIndex, TEXT_LANGUAGES};
 pub use reference::{PassiveSkill, PassthroughReferenceData, ReferenceData, Species};
 pub use repak_oodle::{PakBuilder, PakReader};
 
