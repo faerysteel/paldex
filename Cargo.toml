@@ -11,6 +11,7 @@ repository = "https://github.com/faerysteel/paldex"
 
 [workspace.dependencies]
 paldex-locate = { path = "crates/paldex-locate" }
+paldex-sav = { path = "crates/paldex-sav" }
 
 dirs = "6"
 serde = { version = "1", features = ["derive"] }
