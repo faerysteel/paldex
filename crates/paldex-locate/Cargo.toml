@@ -1,0 +1,18 @@
+[package]
+name = "paldex-locate"
+description = "Discovers Palworld save directories across CrossOver, Whisky, and native Windows Steam installs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dirs.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

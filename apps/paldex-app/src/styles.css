@@ -1,0 +1,252 @@
+:root {
+  --bg: #10131a;
+  --panel: #171b24;
+  --panel-2: #1d222d;
+  --border: #262c39;
+  --text: #e6e9ef;
+  --muted: #8d97ab;
+  --accent: #4ea8de;
+  --accent-dim: #2b6f99;
+  --good: #5cc98b;
+  --warn: #d9a441;
+  --danger: #e0605e;
+
+  color-scheme: dark;
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+/* --- header ------------------------------------------------------------- */
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.75rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.tagline {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* --- buttons ------------------------------------------------------------ */
+
+.btn {
+  border: 1px solid var(--accent-dim);
+  background: var(--accent-dim);
+  color: #fff;
+  padding: 0.45rem 0.9rem;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.btn-ghost:hover {
+  background: var(--panel-2);
+  border-color: var(--muted);
+}
+
+/* --- panels ------------------------------------------------------------- */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 1.1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.panel-error {
+  border-color: var(--danger);
+}
+
+.root-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.source {
+  font-weight: 600;
+}
+
+.steam-id,
+.path {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.path {
+  margin: 0.35rem 0 0.9rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+/* --- worlds ------------------------------------------------------------- */
+
+.worlds {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.world {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+}
+
+.world-dim {
+  opacity: 0.62;
+}
+
+.world-main {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.world-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+
+.world-meta {
+  display: flex;
+  gap: 1rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* --- badges ------------------------------------------------------------- */
+
+.badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid currentcolor;
+}
+
+.badge-localWorld {
+  color: var(--good);
+}
+
+.badge-coopGuestStub {
+  color: var(--warn);
+}
+
+.badge-unknown {
+  color: var(--muted);
+}
+
+/* --- misc --------------------------------------------------------------- */
+
+.others {
+  margin-top: 0.9rem;
+}
+
+.others summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.explain {
+  font-size: 0.85rem;
+  margin: 0.6rem 0 0.75rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.notice {
+  background: rgb(224 96 94 / 12%);
+  border: 1px solid var(--danger);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.88rem;
+  margin: 0 0 1rem;
+}
+
+.checklist {
+  margin: 0.4rem 0 0.9rem;
+  padding-left: 1.1rem;
+  font-size: 0.88rem;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+}

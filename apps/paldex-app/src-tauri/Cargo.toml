@@ -1,0 +1,23 @@
+[package]
+name = "paldex-app"
+description = "Paldex — local-only Palworld save tracker."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# Tauri's mobile targets link against a library, so the binary stays a thin shim.
+name = "paldex_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+paldex-locate.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"

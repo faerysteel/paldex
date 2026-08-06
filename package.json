@@ -1,0 +1,14 @@
+{
+  "name": "paldex",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-only Palworld save tracker for macOS (CrossOver) and Windows (Steam).",
+  "scripts": {
+    "dev": "pnpm -C apps/paldex-app tauri dev",
+    "build": "pnpm -C apps/paldex-app tauri build",
+    "typecheck": "pnpm -C apps/paldex-app typecheck",
+    "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
+    "test:rust": "cargo test --workspace"
+  },
+  "packageManager": "pnpm@10.33.4"
+}

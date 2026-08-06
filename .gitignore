@@ -1,0 +1,21 @@
+# Rust
+/target
+**/target
+
+# Node
+node_modules
+dist
+.vite
+
+# Tauri generated
+apps/paldex-app/src-tauri/gen
+
+# Editors / OS
+.DS_Store
+*.swp
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# Local scratch
+*.local
