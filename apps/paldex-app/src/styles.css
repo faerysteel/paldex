@@ -367,3 +367,15 @@ code {
   height: 32px;
   image-rendering: auto;
 }
+
+/* The roster is windowed: only on-screen rows exist in the DOM, with spacer
+   rows standing in for the rest. That needs a scroll container of known height
+   and a fixed row height matching ROW_HEIGHT in Roster.tsx. */
+.roster-table-wrap {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.roster-table tbody tr {
+  height: 48px;
+}

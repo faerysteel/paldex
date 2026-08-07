@@ -1,4 +1,10 @@
 //! Commands exposed to the frontend.
+//!
+//! Commands that do real work — decoding a save, querying the roster, decoding
+//! icons — are declared `#[tauri::command(async)]`. A plain `#[tauri::command]`
+//! on a synchronous function runs on the **main thread**, which is also the
+//! webview's event loop, so anything slow there freezes the window instead of
+//! merely being slow.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -164,7 +170,7 @@ pub fn resolve_folder(path: PathBuf) -> Result<Vec<SaveRootView>, String> {
 ///
 /// A display-ready message if the world can't be re-resolved, its save
 /// files can't be read/decompressed/parsed, or the store can't be opened.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn select_world(
     app: AppHandle,
     state: State<AppState>,
@@ -195,7 +201,7 @@ pub fn select_world(
 ///
 /// A display-ready message if no world is selected yet, or the re-sync
 /// itself fails the same way `select_world` can.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn force_resync(app: AppHandle, state: State<AppState>) -> Result<SnapshotSummaryView, String> {
     let world_path = state
         .selected
@@ -230,7 +236,7 @@ pub fn force_resync(app: AppHandle, state: State<AppState>) -> Result<SnapshotSu
 /// # Errors
 ///
 /// A display-ready message if no world is selected, or the query fails.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pal_roster(app: AppHandle, state: State<AppState>) -> Result<Vec<PalView>, String> {
     let snapshot_id = selected_snapshot_id(&state)?;
     let mut roster = with_store(&app, &state, |store| queries::pal_roster(store, snapshot_id))?;
@@ -286,7 +292,7 @@ fn resolve_or_id(resolved: Option<&str>, id: &str) -> String {
 /// A display-ready message only if the icon cache lock is poisoned. A pak that
 /// is missing, or an individual icon that fails to decode, yields fewer
 /// entries rather than an error — artwork is never worth failing a screen over.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pal_icons(
     state: State<AppState>,
     character_ids: Vec<String>,
@@ -494,6 +500,42 @@ mod tests {
                 "passive_names must stay parallel to passives"
             );
         }
+    }
+
+    /// Dev-only: dump real command output as JSON so the frontend can be
+    /// driven with genuine data outside the Tauri shell. Runs only when
+    /// `PALDEX_FIXTURE_OUT` names a directory; otherwise it is a no-op.
+    #[test]
+    fn dump_frontend_fixture() {
+        let Ok(out) = std::env::var("PALDEX_FIXTURE_OUT") else { return };
+        let (Some((mut roster, mut flags)), Some(loaded)) = (real_snapshot(), load_reference())
+        else {
+            eprintln!("skipping fixture dump: need a real save and the game pak");
+            return;
+        };
+        enrich_roster(&mut roster, &loaded.index);
+        enrich_flags(&mut flags, &loaded.index);
+
+        let species: std::collections::BTreeSet<String> =
+            roster.iter().map(|p| p.character_id.clone()).collect();
+        let mut icons = serde_json::Map::new();
+        for id in &species {
+            let Some(path) = loaded.index.icon_path(id) else { continue };
+            let path = path.to_owned();
+            let mut pak = loaded.pak.lock().expect("pak lock");
+            if let Ok(png) = paldex_data::load_icon_png(&mut pak, &path) {
+                icons.insert(id.clone(), serde_json::Value::String(to_png_data_url(&png)));
+            }
+        }
+
+        std::fs::create_dir_all(&out).expect("create fixture dir");
+        let write = |name: &str, v: serde_json::Value| {
+            std::fs::write(format!("{out}/{name}.json"), serde_json::to_vec(&v).unwrap()).unwrap();
+        };
+        write("pal_roster", serde_json::to_value(&roster).unwrap());
+        write("player_flags_detail", serde_json::to_value(&flags).unwrap());
+        write("pal_icons", serde_json::Value::Object(icons));
+        eprintln!("fixture: {} pals, {} icons -> {out}", roster.len(), species.len());
     }
 
     /// Icons must survive the whole app-layer path: pak -> decode -> PNG ->

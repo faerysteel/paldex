@@ -21,6 +21,10 @@ pub enum StoreError {
     ClockError,
 }
 
+/// Schema version stamped into `PRAGMA user_version`. Bump when adding a
+/// migration.
+const SCHEMA_VERSION: i32 = 1;
+
 pub struct Store {
     conn: Connection,
 }
@@ -41,8 +45,43 @@ impl Store {
 
     fn from_connection(conn: Connection) -> Result<Self, StoreError> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.execute_batch(include_str!("../migrations/0001_init.sql"))?;
+        Self::migrate(&conn)?;
         Ok(Self { conn })
+    }
+
+    /// Bring a database up to [`SCHEMA_VERSION`], skipping work already done.
+    ///
+    /// Tracked via `PRAGMA user_version` rather than `IF NOT EXISTS` on each
+    /// statement: `IF NOT EXISTS` would let a *future* schema change silently
+    /// no-op against an old database, which is a far worse failure than an
+    /// error. The version stamp makes "which migrations has this file seen"
+    /// explicit.
+    fn migrate(conn: &Connection) -> Result<(), StoreError> {
+        let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version >= SCHEMA_VERSION {
+            return Ok(());
+        }
+
+        // Databases created before versioning existed carry the full schema
+        // but a version of 0. Re-running the DDL against them fails on
+        // `table worlds already exists`, so adopt them by stamping instead.
+        if version == 0 && Self::has_initial_schema(conn)? {
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            return Ok(());
+        }
+
+        conn.execute_batch(include_str!("../migrations/0001_init.sql"))?;
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        Ok(())
+    }
+
+    fn has_initial_schema(conn: &Connection) -> Result<bool, StoreError> {
+        let count: i32 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'worlds'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
     }
 
     /// Record (or refresh) a known save world.

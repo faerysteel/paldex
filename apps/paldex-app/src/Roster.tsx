@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
@@ -9,6 +9,13 @@ import type {
   SnapshotSummaryView,
 } from "./types";
 import { relativeTime } from "./time";
+
+/// Fixed row height, in px, matching `.roster-table tbody tr` in styles.css.
+/// Windowed rendering needs to know it without measuring.
+const ROW_HEIGHT = 48;
+/// Rows rendered beyond the viewport on each side, so a fast scroll doesn't
+/// expose blank space before React catches up.
+const OVERSCAN = 10;
 
 type Sort = { column: SortColumn; direction: "asc" | "desc" };
 type SortColumn = "characterId" | "level" | "ivAvg" | "rank";
@@ -25,6 +32,10 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
   const [players, setPlayers] = useState<PlayerProgressView[] | null>(null);
   const [playerFlags, setPlayerFlags] = useState<PlayerFlagsView[] | null>(null);
   const [icons, setIcons] = useState<Record<string, string>>({});
+  const iconUrlsRef = useRef<string[]>([]);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [resyncing, setResyncing] = useState(false);
   const [filter, setFilter] = useState("");
@@ -49,7 +60,22 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
       // optional, so a failure here must not blank the roster.
       const species = [...new Set(palsResult.map((p) => p.characterId))];
       try {
-        setIcons(await invoke<Record<string, string>>("pal_icons", { characterIds: species }));
+        const dataUrls = await invoke<Record<string, string>>("pal_icons", {
+          characterIds: species,
+        });
+        // Convert to blob URLs before they reach the DOM. A data URL is ~22 KB
+        // of base64, and the same species repeats across many rows, so putting
+        // them in `src` directly costs tens of MB of attribute text and defeats
+        // the webview's per-URL image cache.
+        const blobUrls: Record<string, string> = {};
+        await Promise.all(
+          Object.entries(dataUrls).map(async ([id, dataUrl]) => {
+            blobUrls[id] = URL.createObjectURL(await (await fetch(dataUrl)).blob());
+          }),
+        );
+        iconUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+        iconUrlsRef.current = Object.values(blobUrls);
+        setIcons(blobUrls);
       } catch (e) {
         console.warn("icons unavailable:", e);
       }
@@ -61,6 +87,31 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
   useEffect(() => {
     void load();
   }, [load, summary.snapshotId]);
+
+  useEffect(
+    () => () => {
+      iconUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      iconUrlsRef.current = [];
+    },
+    [],
+  );
+
+  // Track the scroll container so only visible rows are rendered.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const sync = () => {
+      setScrollTop(el.scrollTop);
+      setViewportHeight(el.clientHeight);
+    };
+    sync();
+    el.addEventListener("scroll", sync, { passive: true });
+    window.addEventListener("resize", sync);
+    return () => {
+      el.removeEventListener("scroll", sync);
+      window.removeEventListener("resize", sync);
+    };
+  }, [pals]);
 
   const resync = useCallback(async () => {
     setResyncing(true);
@@ -102,6 +153,20 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
     });
     return sorted;
   }, [pals, filter, sort]);
+
+  // Only the rows on screen are rendered. A full roster is ~2000 rows, each
+  // now carrying an icon; rendering all of them is what blanked the window.
+  const visible = useMemo(() => {
+    const total = filtered.length;
+    const height = viewportHeight || 600;
+    const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+    const end = Math.min(total, Math.ceil((scrollTop + height) / ROW_HEIGHT) + OVERSCAN);
+    return {
+      rows: filtered.slice(start, end),
+      padTop: start * ROW_HEIGHT,
+      padBottom: (total - end) * ROW_HEIGHT,
+    };
+  }, [filtered, scrollTop, viewportHeight]);
 
   const toggleSort = (column: SortColumn) => {
     setSort((prev) =>
@@ -207,7 +272,7 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
       {pals === null && !error && <p className="muted">Loading roster…</p>}
 
       {pals !== null && (
-        <div className="roster-table-wrap">
+        <div className="roster-table-wrap" ref={wrapRef}>
           <table className="roster-table">
             <thead>
               <tr>
@@ -232,7 +297,8 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((pal) => (
+              {visible.padTop > 0 && <tr aria-hidden="true" style={{ height: visible.padTop }} />}
+              {visible.rows.map((pal) => (
                 <tr key={pal.instanceId}>
                   <td className="icon-col">
                     {icons[pal.characterId] && (
@@ -266,6 +332,9 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
                   </td>
                 </tr>
               ))}
+              {visible.padBottom > 0 && (
+                <tr aria-hidden="true" style={{ height: visible.padBottom }} />
+              )}
             </tbody>
           </table>
           {filtered.length === 0 && (

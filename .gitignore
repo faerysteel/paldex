@@ -20,3 +20,5 @@ apps/paldex-app/src-tauri/gen
 # Local scratch
 *.local
 
+# Preview-harness fixtures, generated from a personal save (see apps/paldex-app/preview/README.md)
+apps/paldex-app/public/__fixture__/
