@@ -16,6 +16,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::time::Duration;
 
@@ -91,9 +92,39 @@ pub fn read_when_stable(path: &Path, config: &WatchConfig) -> Option<Vec<u8>> {
 /// on a dedicated thread. `on_change` receives the path and its
 /// stability-verified bytes; a path that never stabilizes within the retry
 /// budget is silently skipped (it'll fire again on the next real event).
+///
+/// # Errors
+///
+/// Returns [`WatchError::Notify`] if the platform watcher can't be created or
+/// can't be pointed at `world_dir`.
 pub fn watch(
     world_dir: &Path,
     config: WatchConfig,
+    on_change: impl FnMut(&Path, Vec<u8>),
+) -> Result<(), WatchError> {
+    static NEVER: AtomicBool = AtomicBool::new(false);
+    watch_until(world_dir, config, &NEVER, on_change)
+}
+
+/// [`watch`], but stoppable: returns once `stop` reads true.
+///
+/// Needed because the app re-points the watcher whenever a different world is
+/// selected, and a detached thread blocked forever in [`watch`] would go on
+/// re-ingesting the *previous* world behind the new selection.
+///
+/// `stop` is observed between debounce windows, so it is honoured within
+/// roughly `config.debounce` while idle, and after any in-flight
+/// `read_when_stable`/`on_change` otherwise. Deliberately not a hard
+/// interrupt — tearing down mid-ingest would be worse than waiting.
+///
+/// # Errors
+///
+/// Returns [`WatchError::Notify`] if the platform watcher can't be created or
+/// can't be pointed at `world_dir`.
+pub fn watch_until(
+    world_dir: &Path,
+    config: WatchConfig,
+    stop: &AtomicBool,
     mut on_change: impl FnMut(&Path, Vec<u8>),
 ) -> Result<(), WatchError> {
     let (tx, rx) = channel::<PathBuf>();
@@ -111,6 +142,9 @@ pub fn watch(
 
     let mut pending: Option<PathBuf> = None;
     loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         let wait = config.debounce;
         match rx.recv_timeout(wait) {
             Ok(path) => {
@@ -123,6 +157,9 @@ pub fn watch(
             }
             Err(RecvTimeoutError::Timeout) => {
                 if let Some(path) = pending.take() {
+                    if stop.load(Ordering::Relaxed) {
+                        return Ok(());
+                    }
                     if let Some(bytes) = read_when_stable(&path, &config) {
                         on_change(&path, bytes);
                     }

@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::Connection;
 
 pub use ingest::SnapshotInput;
-pub use watch::{read_when_stable, watch, WatchConfig, WatchError};
+pub use watch::{read_when_stable, watch, watch_until, WatchConfig, WatchError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
