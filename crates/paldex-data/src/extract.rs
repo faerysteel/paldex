@@ -142,9 +142,12 @@ impl ReferenceIndex {
                     character_id: character_id.to_owned(),
                     display_name: display.unwrap_or_else(|| character_id.to_owned()),
                     dex_number: None,
+                    dex_suffix: String::new(),
                 },
             );
         }
+
+        index.apply_dex_numbers();
 
         for entry in read_text_table(pak, &text_root, SKILL_NAMES.0)? {
             let display_name = entry.display().unwrap_or_else(|| entry.key.clone());
@@ -187,6 +190,46 @@ impl ReferenceIndex {
         }
 
         Ok(index)
+    }
+
+    /// Paldeck numbers, keyed by internal `CharacterID`.
+    ///
+    /// Vendored rather than extracted: `ZukanIndex` is a numeric DataTable
+    /// field, and the pak sets `PKG_UnversionedProperties`, so reading it
+    /// needs a `.usmap` that doesn't exist for this build. Everything else the
+    /// index holds still comes from the user's own pak. See the file header
+    /// for provenance and how it was validated against this game build.
+    const DEX_NUMBERS: &'static str = include_str!("../data/dex_numbers.tsv");
+
+    /// Attach Paldeck numbers to the species read from the pak.
+    ///
+    /// Species absent from the table keep `dex_number: None`, which is
+    /// meaningful rather than missing data — those are the tower bosses, raid
+    /// content, and unused entries that have no Paldeck entry in game either.
+    fn apply_dex_numbers(&mut self) {
+        for line in Self::DEX_NUMBERS.lines() {
+            if line.starts_with('#') || line.trim().is_empty() {
+                continue;
+            }
+            let mut fields = line.split('\t');
+            let (Some(character_id), Some(index)) = (fields.next(), fields.next()) else {
+                continue;
+            };
+            let Ok(number) = index.parse::<u32>() else { continue };
+            let suffix = fields.next().unwrap_or("").trim();
+
+            if let Some(species) = self.species.get_mut(&normalize_key(character_id)) {
+                species.dex_number = Some(number);
+                species.dex_suffix = suffix.to_owned();
+            }
+        }
+    }
+
+    /// How many species carry a Paldeck number — the real Paldeck
+    /// denominator, unlike [`Self::species_count`].
+    #[must_use]
+    pub fn dex_entry_count(&self) -> usize {
+        self.species.values().filter(|s| s.dex_number.is_some()).count()
     }
 
     #[must_use]
@@ -417,7 +460,12 @@ mod tests {
         let mut index = ReferenceIndex::default();
         index.species.insert(
             "anubis".into(),
-            Species { character_id: "Anubis".into(), display_name: "Anubis".into(), dex_number: None },
+            Species {
+                character_id: "Anubis".into(),
+                display_name: "Anubis".into(),
+                dex_number: None,
+                dex_suffix: String::new(),
+            },
         );
         index.human_npc_ids.insert("anubis".into());
         index.human_npc_ids.insert("hunter_rifle".into());

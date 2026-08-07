@@ -65,7 +65,23 @@
 pub struct Species {
     pub character_id: String,
     pub display_name: String,
+    /// Paldeck number. `None` for tower bosses, raid/collab content, and
+    /// unused entries, which the game data itself leaves unnumbered — that
+    /// absence is what separates a real Paldeck species from the rest.
     pub dex_number: Option<u32>,
+    /// Variant marker shown after the number, e.g. the `B` in `005B`. Empty
+    /// for a base species.
+    pub dex_suffix: String,
+}
+
+impl Species {
+    /// The Paldeck label as the game shows it, e.g. `005B`, or `None` for a
+    /// species with no Paldeck entry.
+    #[must_use]
+    pub fn dex_label(&self) -> Option<String> {
+        self.dex_number
+            .map(|n| format!("{n:03}{}", self.dex_suffix))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

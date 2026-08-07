@@ -62,4 +62,15 @@ fn main() {
     for id in ["Accessory_NormalResist_1", "Wood"] {
         println!("  item {id:20} -> {:?}", index.item(id));
     }
+
+    // `DUMP_SPECIES=1` lists every species as `character_id<TAB>display_name`,
+    // for joining the pak's own species set against external data.
+    if env::var_os("DUMP_SPECIES").is_some() {
+        println!("\n--- all species ---");
+        let mut all: Vec<_> = index.species_iter().collect();
+        all.sort_by(|a, b| a.character_id.cmp(&b.character_id));
+        for s in all {
+            println!("SPECIES\t{}\t{}", s.character_id, s.display_name);
+        }
+    }
 }
