@@ -44,12 +44,14 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
   const load = useCallback(async () => {
     setError(null);
     try {
+      console.info("[paldex] roster: requesting data");
       const [palsResult, dexResult, playersResult, flagsResult] = await Promise.all([
         invoke<PalView[]>("pal_roster"),
         invoke<DexProgressView>("dex_progress"),
         invoke<PlayerProgressView[]>("player_progress"),
         invoke<PlayerFlagsView[]>("player_flags_detail"),
       ]);
+      console.info(`[paldex] roster: got ${palsResult.length} pals`);
       setPals(palsResult);
       setDex(dexResult);
       setPlayers(playersResult);
@@ -60,9 +62,11 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
       // optional, so a failure here must not blank the roster.
       const species = [...new Set(palsResult.map((p) => p.characterId))];
       try {
+        console.info(`[paldex] roster: requesting ${species.length} icons`);
         const dataUrls = await invoke<Record<string, string>>("pal_icons", {
           characterIds: species,
         });
+        console.info(`[paldex] roster: received ${Object.keys(dataUrls).length} icons`);
         // Convert to blob URLs before they reach the DOM. A data URL is ~22 KB
         // of base64, and the same species repeats across many rows, so putting
         // them in `src` directly costs tens of MB of attribute text and defeats
@@ -75,6 +79,7 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
         );
         iconUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
         iconUrlsRef.current = Object.values(blobUrls);
+        console.info("[paldex] roster: icons ready");
         setIcons(blobUrls);
       } catch (e) {
         console.warn("icons unavailable:", e);

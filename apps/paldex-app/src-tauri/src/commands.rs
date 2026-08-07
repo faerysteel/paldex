@@ -176,6 +176,7 @@ pub fn select_world(
     state: State<AppState>,
     world_path: PathBuf,
 ) -> Result<SnapshotSummaryView, String> {
+    eprintln!("[paldex] select_world: {}", world_path.display());
     let world = sync::find_world_by_path(&world_path)
         .ok_or_else(|| format!("world not found at {}", world_path.display()))?;
     if !world.is_trackable() {
@@ -192,6 +193,7 @@ pub fn select_world(
         latest_snapshot_id: snapshot_id,
     });
 
+    eprintln!("[paldex] select_world: ingested snapshot {snapshot_id}");
     with_store(&app, &state, |store| queries::snapshot_summary(store, snapshot_id))
 }
 
@@ -238,12 +240,14 @@ pub fn force_resync(app: AppHandle, state: State<AppState>) -> Result<SnapshotSu
 /// A display-ready message if no world is selected, or the query fails.
 #[tauri::command(async)]
 pub fn pal_roster(app: AppHandle, state: State<AppState>) -> Result<Vec<PalView>, String> {
+    eprintln!("[paldex] pal_roster: start");
     let snapshot_id = selected_snapshot_id(&state)?;
     let mut roster = with_store(&app, &state, |store| queries::pal_roster(store, snapshot_id))?;
 
     if let Some(reference) = state.reference() {
         enrich_roster(&mut roster, reference);
     }
+    eprintln!("[paldex] pal_roster: returning {} rows", roster.len());
     Ok(roster)
 }
 
@@ -298,7 +302,14 @@ pub fn pal_icons(
     character_ids: Vec<String>,
 ) -> Result<HashMap<String, String>, String> {
     let mut out = HashMap::new();
+    // Escape hatch for diagnosing UI trouble without a rebuild: run the app
+    // with PALDEX_NO_ICONS=1 to serve the roster with no artwork at all.
+    if std::env::var_os("PALDEX_NO_ICONS").is_some() {
+        eprintln!("[paldex] pal_icons: disabled via PALDEX_NO_ICONS");
+        return Ok(out);
+    }
     let Some(reference) = state.loaded_reference() else {
+        eprintln!("[paldex] pal_icons: no reference data (no pak found)");
         return Ok(out);
     };
 
@@ -322,6 +333,8 @@ pub fn pal_icons(
             out.insert(id, url.clone());
         }
     }
+    let bytes: usize = out.values().map(String::len).sum();
+    eprintln!("[paldex] pal_icons: {} icons, {} KB of payload", out.len(), bytes / 1024);
     Ok(out)
 }
 
