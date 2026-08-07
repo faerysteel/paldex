@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 
 import type {
-  DexProgressView,
   PalView,
   PlayerFlagsView,
   PlayerProgressView,
   SnapshotSummaryView,
 } from "./types";
-import { relativeTime } from "./time";
+import { useSpeciesIcons } from "./icons";
 
 /// Fixed row height, in px, matching `.roster-table tbody tr` in styles.css.
 /// Windowed rendering needs to know it without measuring.
@@ -17,34 +15,22 @@ const ROW_HEIGHT = 48;
 /// Rows rendered beyond the viewport on each side, so a fast scroll doesn't
 /// expose blank space before React catches up.
 const OVERSCAN = 10;
-/// Emitted by the Rust watcher after every automatic re-sync that ingested a
-/// new snapshot. Must match `commands::SNAPSHOT_EVENT`.
-const SNAPSHOT_EVENT = "paldex://snapshot";
-/// How long the "Updated just now" flash stays up after an automatic sync.
-const FLASH_MS = 4000;
 
 type Sort = { column: SortColumn; direction: "asc" | "desc" };
 type SortColumn = "characterId" | "level" | "ivAvg" | "rank";
 
 interface Props {
   summary: SnapshotSummaryView;
-  onBack: () => void;
-  onSummaryChange: (summary: SnapshotSummaryView) => void;
 }
 
-export default function Roster({ summary, onBack, onSummaryChange }: Props) {
+export default function Roster({ summary }: Props) {
   const [pals, setPals] = useState<PalView[] | null>(null);
-  const [dex, setDex] = useState<DexProgressView | null>(null);
   const [players, setPlayers] = useState<PlayerProgressView[] | null>(null);
   const [playerFlags, setPlayerFlags] = useState<PlayerFlagsView[] | null>(null);
-  const [icons, setIcons] = useState<Record<string, string>>({});
-  const iconUrlsRef = useRef<string[]>([]);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [resyncing, setResyncing] = useState(false);
-  const [lastAutoSync, setLastAutoSync] = useState<number | null>(null);
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<Sort>({ column: "level", direction: "desc" });
 
@@ -52,45 +38,15 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
     setError(null);
     try {
       console.info("[paldex] roster: requesting data");
-      const [palsResult, dexResult, playersResult, flagsResult] = await Promise.all([
+      const [palsResult, playersResult, flagsResult] = await Promise.all([
         invoke<PalView[]>("pal_roster"),
-        invoke<DexProgressView>("dex_progress"),
         invoke<PlayerProgressView[]>("player_progress"),
         invoke<PlayerFlagsView[]>("player_flags_detail"),
       ]);
       console.info(`[paldex] roster: got ${palsResult.length} pals`);
       setPals(palsResult);
-      setDex(dexResult);
       setPlayers(playersResult);
       setPlayerFlags(flagsResult);
-
-      // One batched call for the few hundred distinct species on screen —
-      // per-row requests would be hundreds of IPC round trips. Artwork is
-      // optional, so a failure here must not blank the roster.
-      const species = [...new Set(palsResult.map((p) => p.characterId))];
-      try {
-        console.info(`[paldex] roster: requesting ${species.length} icons`);
-        const dataUrls = await invoke<Record<string, string>>("pal_icons", {
-          characterIds: species,
-        });
-        console.info(`[paldex] roster: received ${Object.keys(dataUrls).length} icons`);
-        // Convert to blob URLs before they reach the DOM. A data URL is ~22 KB
-        // of base64, and the same species repeats across many rows, so putting
-        // them in `src` directly costs tens of MB of attribute text and defeats
-        // the webview's per-URL image cache.
-        const blobUrls: Record<string, string> = {};
-        await Promise.all(
-          Object.entries(dataUrls).map(async ([id, dataUrl]) => {
-            blobUrls[id] = URL.createObjectURL(await (await fetch(dataUrl)).blob());
-          }),
-        );
-        iconUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-        iconUrlsRef.current = Object.values(blobUrls);
-        console.info("[paldex] roster: icons ready");
-        setIcons(blobUrls);
-      } catch (e) {
-        console.warn("icons unavailable:", e);
-      }
     } catch (e) {
       setError(String(e));
     }
@@ -99,14 +55,6 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
   useEffect(() => {
     void load();
   }, [load, summary.snapshotId]);
-
-  useEffect(
-    () => () => {
-      iconUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-      iconUrlsRef.current = [];
-    },
-    [],
-  );
 
   // Track the scroll container so only visible rows are rendered.
   useEffect(() => {
@@ -124,45 +72,6 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
       window.removeEventListener("resize", sync);
     };
   }, [pals]);
-
-  const resync = useCallback(async () => {
-    setResyncing(true);
-    setError(null);
-    try {
-      const next = await invoke<SnapshotSummaryView>("force_resync");
-      onSummaryChange(next);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setResyncing(false);
-    }
-  }, [onSummaryChange]);
-
-  // Live sync. The Rust watcher re-ingests on every in-game save and pushes
-  // the resulting snapshot here; handing it to `onSummaryChange` is enough to
-  // refresh the whole screen, because `load` above is keyed on
-  // `summary.snapshotId`. Nothing here polls.
-  //
-  // Declared unconditionally alongside every other hook — an early return
-  // between hooks is exactly what caused the blank-screen bug in `App.tsx`.
-  useEffect(() => {
-    const pending = listen<SnapshotSummaryView>(SNAPSHOT_EVENT, (event) => {
-      console.info(`[paldex] roster: auto-sync -> snapshot ${event.payload.snapshotId}`);
-      onSummaryChange(event.payload);
-      setLastAutoSync(Date.now());
-    });
-    return () => {
-      void pending.then((unlisten) => unlisten());
-    };
-  }, [onSummaryChange]);
-
-  // A timestamp rather than a boolean, so a second auto-sync arriving while
-  // the first is still showing restarts the flash instead of being swallowed.
-  useEffect(() => {
-    if (lastAutoSync === null) return;
-    const timer = setTimeout(() => setLastAutoSync(null), FLASH_MS);
-    return () => clearTimeout(timer);
-  }, [lastAutoSync]);
 
   const filtered = useMemo(() => {
     if (!pals) return [];
@@ -206,6 +115,15 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
     };
   }, [filtered, scrollTop, viewportHeight]);
 
+  // Artwork for the species actually rendered. The windowed row list changes
+  // as the user scrolls, so this keys off the whole filtered set rather than
+  // the visible slice — otherwise every scroll would refetch.
+  const speciesOnScreen = useMemo(
+    () => [...new Set(filtered.map((p) => p.characterId))],
+    [filtered],
+  );
+  const icons = useSpeciesIcons(speciesOnScreen);
+
   const toggleSort = (column: SortColumn) => {
     setSort((prev) =>
       prev.column === column
@@ -215,41 +133,8 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
   };
 
   return (
-    <div className="roster">
-      <header className="header">
-        <div>
-          <h1>Roster</h1>
-          <p className="tagline">
-            {summary.palCount} pals · {summary.playerCount} player
-            {summary.playerCount === 1 ? "" : "s"} · synced{" "}
-            {relativeTime(summary.takenAt)}
-            {lastAutoSync !== null && (
-              <span className="live-flash"> · updated from a new save</span>
-            )}
-          </p>
-          <p className="muted watching">
-            Watching for in-game saves — the roster updates on its own.
-          </p>
-        </div>
-        <div className="actions">
-          <button className="btn" onClick={() => void resync()} disabled={resyncing}>
-            {resyncing ? "Syncing…" : "Resync"}
-          </button>
-          <button className="btn btn-ghost" onClick={onBack}>
-            ← Back
-          </button>
-        </div>
-      </header>
-
+    <>
       {error && <p className="notice">{error}</p>}
-
-      {dex && (
-        <p className="muted dex-summary">
-          Dex: {dex.unlockedSpeciesCount} species unlocked (across every player
-          — a total isn't shown yet, since species reference data isn't wired
-          up)
-        </p>
-      )}
 
       {players && players.length > 0 && (
         <details className="others">
@@ -388,7 +273,7 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
           )}
         </div>
       )}
-    </div>
+    </>
   );
 }
 

@@ -71,9 +71,23 @@ export interface PalView {
   masteredMoves: string[];
 }
 
+export interface DexEntryView {
+  characterId: string;
+  displayName: string;
+  /** Paldeck number as the game shows it, e.g. "005B". */
+  dexLabel: string | null;
+  caught: boolean;
+  /** Best `PalCaptureCount` across players, toward the 10-capture bonus. */
+  captureCount: number;
+  bonusClaimed: boolean;
+}
+
 export interface DexProgressView {
   unlockedSpeciesCount: number;
   unlockedSpecies: string[];
+  /** Total Paldeck entries, or 0 without a pak. */
+  totalSpeciesCount: number;
+  entries: DexEntryView[];
 }
 
 export interface PlayerProgressView {

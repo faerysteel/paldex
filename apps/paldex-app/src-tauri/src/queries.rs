@@ -41,11 +41,51 @@ pub struct PalView {
 #[serde(rename_all = "camelCase")]
 pub struct DexProgressView {
     /// Species unlocked across every player in this world (a species any
-    /// player has caught counts once). No denominator/percentage yet — that
-    /// needs Phase 3's species reference table, currently a stub (see
-    /// `paldex-data`'s `ReferenceData` docs).
+    /// player has caught counts once), straight from `PaldeckUnlockFlag`.
     pub unlocked_species_count: i64,
     pub unlocked_species: Vec<String>,
+    /// Total Paldeck entries — species that carry a Paldeck number. 0 without
+    /// a pak.
+    ///
+    /// This is the real denominator, not the count of named species: tower
+    /// bosses, raid/collab content, and unused entries have no Paldeck number
+    /// and are excluded, exactly as the game excludes them.
+    pub total_species_count: i64,
+    /// One row per Paldeck entry when a pak is available; otherwise one row
+    /// per unlocked species, so the grid still renders without the game
+    /// installed — just without the unseen ones.
+    pub entries: Vec<DexEntryView>,
+}
+
+/// A single species' dex state. Built in the command layer, which is where
+/// store facts meet pak reference data.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DexEntryView {
+    pub character_id: String,
+    pub display_name: String,
+    /// Paldeck number as the game shows it, e.g. `005B`. `None` only for a
+    /// caught species with no Paldeck entry, which the grid still lists rather
+    /// than dropping.
+    pub dex_label: Option<String>,
+    /// From `PaldeckUnlockFlag`, so releasing or butchering a Pal never
+    /// un-catches it — `dex_events` is append-only.
+    pub caught: bool,
+    /// Best `PalCaptureCount` across players, toward the 10-capture bonus.
+    pub capture_count: i64,
+    /// Whether any player has claimed this species' 10-capture bonus.
+    pub bonus_claimed: bool,
+}
+
+/// Dex facts as the store has them, keyed by the save's own species ids —
+/// before reference data maps them onto canonical species and names them.
+#[derive(Debug, Default)]
+pub struct DexFacts {
+    pub unlocked: Vec<String>,
+    /// Save species id -> best capture count across players.
+    pub capture_counts: std::collections::HashMap<String, i64>,
+    /// Save species ids whose capture bonus at least one player has claimed.
+    pub bonus_claimed: std::collections::HashSet<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -181,20 +221,49 @@ pub fn pal_roster(store: &Store, snapshot_id: i64) -> Result<Vec<PalView>, Strin
     Ok(pals)
 }
 
-pub fn dex_progress(store: &Store, world_id: &str) -> Result<DexProgressView, String> {
+/// Every dex fact the store holds for a world: which species are unlocked
+/// (append-only, across every snapshot) plus this snapshot's capture progress.
+///
+/// Capture counts are per player and the 10-capture bonus is earned per
+/// player, so the best count across players is what "progress toward the
+/// bonus" means for the world as a whole.
+pub fn dex_facts(store: &Store, world_id: &str, snapshot_id: i64) -> Result<DexFacts, String> {
     let conn = store.conn();
     let mut stmt = conn
         .prepare("SELECT DISTINCT character_id FROM dex_events WHERE world_id = ?1 ORDER BY character_id")
         .map_err(|e| e.to_string())?;
-    let unlocked_species: Vec<String> = stmt
+    let unlocked: Vec<String> = stmt
         .query_map([world_id], |row| row.get(0))
         .map_err(|e| e.to_string())?
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
-    Ok(DexProgressView {
-        unlocked_species_count: unlocked_species.len() as i64,
-        unlocked_species,
-    })
+
+    let mut count_stmt = conn
+        .prepare(
+            "SELECT flag_key, MAX(COALESCE(value, 0)) FROM player_flags
+             WHERE snapshot_id = ?1 AND flag_kind = 'capture_count'
+             GROUP BY flag_key",
+        )
+        .map_err(|e| e.to_string())?;
+    let capture_counts = count_stmt
+        .query_map([snapshot_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let mut bonus_stmt = conn
+        .prepare(
+            "SELECT DISTINCT flag_key FROM player_flags
+             WHERE snapshot_id = ?1 AND flag_kind = 'capture_bonus_claimed'",
+        )
+        .map_err(|e| e.to_string())?;
+    let bonus_claimed = bonus_stmt
+        .query_map([snapshot_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(DexFacts { unlocked, capture_counts, bonus_claimed })
 }
 
 pub fn player_progress(store: &Store, snapshot_id: i64) -> Result<Vec<PlayerProgressView>, String> {

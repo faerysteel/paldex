@@ -483,10 +483,110 @@ pub fn reference_status(state: State<AppState>) -> ReferenceStatusView {
 /// # Errors
 ///
 /// A display-ready message if no world is selected, or the query fails.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dex_progress(app: AppHandle, state: State<AppState>) -> Result<DexProgressView, String> {
     let world_id = selected_world_id(&state)?;
-    with_store(&app, &state, |store| queries::dex_progress(store, &world_id))
+    let snapshot_id = selected_snapshot_id(&state)?;
+    let facts = with_store(&app, &state, |store| {
+        queries::dex_facts(store, &world_id, snapshot_id)
+    })?;
+
+    Ok(match state.reference() {
+        Some(index) => dex_with_reference(&facts, index),
+        None => dex_without_reference(&facts),
+    })
+}
+
+/// Project the save's dex facts onto the pak's species list, so the grid can
+/// show what hasn't been caught yet rather than only what has.
+///
+/// Save ids and reference keys don't match literally — `FName`s are
+/// case-insensitive, the data is inconsistent (`Sheepball` vs `SheepBall`),
+/// and variants carry a `BOSS_`/`PREDATOR_` prefix. Every id is therefore
+/// funnelled through `index.species()`, which owns that normalization, rather
+/// than compared directly. Alpha and predator variants collapse onto their
+/// base species, which is what the Paldeck does too.
+fn dex_with_reference(facts: &queries::DexFacts, index: &ReferenceIndex) -> DexProgressView {
+    let canonical = |save_id: &str| index.species(save_id).map(|s| s.character_id.clone());
+
+    let caught: std::collections::HashSet<String> =
+        facts.unlocked.iter().filter_map(|id| canonical(id)).collect();
+    let bonus: std::collections::HashSet<String> =
+        facts.bonus_claimed.iter().filter_map(|id| canonical(id)).collect();
+
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    for (save_id, count) in &facts.capture_counts {
+        if let Some(key) = canonical(save_id) {
+            // Variants fold into the base species, so keep the best.
+            let slot = counts.entry(key).or_insert(0);
+            *slot = (*slot).max(*count);
+        }
+    }
+
+    // Only species with a Paldeck number are Paldeck entries. Tower bosses,
+    // raid/collab content, and unused entries are excluded here for the same
+    // reason the game excludes them — counting them was what inflated the
+    // denominator to 322. A caught species with no number is still listed
+    // rather than dropped, so the caught total can never silently shrink.
+    let mut entries: Vec<queries::DexEntryView> = index
+        .species_iter()
+        .filter(|species| {
+            species.dex_number.is_some() || caught.contains(&species.character_id)
+        })
+        .map(|species| queries::DexEntryView {
+            caught: caught.contains(&species.character_id),
+            capture_count: counts.get(&species.character_id).copied().unwrap_or(0),
+            bonus_claimed: bonus.contains(&species.character_id),
+            character_id: species.character_id.clone(),
+            display_name: species.display_name.clone(),
+            dex_label: species.dex_label(),
+        })
+        .collect();
+
+    // Paldeck order: by number, with a base species ahead of its `B` variant.
+    // Anything unnumbered sorts last, by name.
+    entries.sort_by(|a, b| {
+        let key = |e: &queries::DexEntryView| {
+            (
+                e.dex_label.is_none(),
+                e.dex_label.clone().unwrap_or_default(),
+                e.display_name.clone(),
+            )
+        };
+        key(a).cmp(&key(b))
+    });
+
+    DexProgressView {
+        unlocked_species_count: entries.iter().filter(|e| e.caught).count() as i64,
+        unlocked_species: facts.unlocked.clone(),
+        total_species_count: index.dex_entry_count() as i64,
+        entries,
+    }
+}
+
+/// Fallback with no game installed: the save alone knows what was caught but
+/// not what exists, so the grid shows caught species only.
+fn dex_without_reference(facts: &queries::DexFacts) -> DexProgressView {
+    let mut entries: Vec<queries::DexEntryView> = facts
+        .unlocked
+        .iter()
+        .map(|id| queries::DexEntryView {
+            character_id: id.clone(),
+            display_name: id.clone(),
+            dex_label: None,
+            caught: true,
+            capture_count: facts.capture_counts.get(id).copied().unwrap_or(0),
+            bonus_claimed: facts.bonus_claimed.contains(id),
+        })
+        .collect();
+    entries.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+
+    DexProgressView {
+        unlocked_species_count: entries.len() as i64,
+        unlocked_species: facts.unlocked.clone(),
+        total_species_count: 0,
+        entries,
+    }
 }
 
 /// Per-player progression for the currently selected world's latest snapshot.
@@ -624,6 +724,70 @@ mod tests {
         }
     }
 
+    /// The dex grid's whole value is showing what *hasn't* been caught, which
+    /// only works if the save's species ids line up with the pak's. A silent
+    /// normalization mismatch would show a fully-played world as almost
+    /// entirely unseen, so this asserts the join really lands.
+    #[test]
+    fn dex_entries_join_save_ids_onto_pak_species() {
+        let Some(loaded) = load_reference() else {
+            eprintln!("skipping: need the game pak");
+            return;
+        };
+        let Some(world) = crate::sync::tests::real_trackable_world() else {
+            eprintln!("skipping: need a real save");
+            return;
+        };
+        let mut store = Store::open_in_memory().expect("store");
+        let snapshot_id = crate::sync::sync_world(&mut store, &world).expect("sync");
+        let facts = queries::dex_facts(&store, &world.id, snapshot_id).expect("dex_facts");
+
+        let view = dex_with_reference(&facts, &loaded.index);
+        eprintln!(
+            "dex: {}/{} species caught, {} entries",
+            view.unlocked_species_count,
+            view.total_species_count,
+            view.entries.len()
+        );
+
+        assert!(!facts.unlocked.is_empty(), "the real world has caught species");
+        assert!(
+            view.total_species_count > view.unlocked_species_count,
+            "the pak should know more species than one save has caught"
+        );
+
+        // The join is the part that breaks silently. Nearly every id the save
+        // recorded must map onto a pak species; a handful of quest-only forms
+        // legitimately have no name row of their own.
+        let unmapped = facts
+            .unlocked
+            .iter()
+            .filter(|id| loaded.index.species(id).is_none())
+            .collect::<Vec<_>>();
+        eprintln!("{} unlocked ids did not map to a species", unmapped.len());
+        assert!(
+            unmapped.len() * 100 / facts.unlocked.len() <= 10,
+            "expected nearly every unlocked id to map; {} of {} did not, e.g. {:?}",
+            unmapped.len(),
+            facts.unlocked.len(),
+            &unmapped[..unmapped.len().min(5)]
+        );
+
+        let caught = view.entries.iter().filter(|e| e.caught).count();
+        assert_eq!(
+            caught as i64, view.unlocked_species_count,
+            "the caught tiles must agree with the headline count"
+        );
+        assert!(
+            view.entries.iter().any(|e| !e.caught),
+            "a real world should still have uncaught species to show"
+        );
+        assert!(
+            view.entries.iter().all(|e| !e.display_name.is_empty()),
+            "every tile needs a label"
+        );
+    }
+
     /// Dev-only: dump real command output as JSON so the frontend can be
     /// driven with genuine data outside the Tauri shell. Runs only when
     /// `PALDEX_FIXTURE_OUT` names a directory; otherwise it is a no-op.
@@ -638,8 +802,29 @@ mod tests {
         enrich_roster(&mut roster, &loaded.index);
         enrich_flags(&mut flags, &loaded.index);
 
-        let species: std::collections::BTreeSet<String> =
+        // The dex grid needs the same projection the command performs, so the
+        // harness renders real Paldeck numbers rather than a hand-made stub.
+        // `player_progress` comes from the same snapshot: the roster screen
+        // requests it too, and a missing fixture surfaces as an error banner.
+        let derived = crate::sync::tests::real_trackable_world().and_then(|world| {
+            let mut store = Store::open_in_memory().ok()?;
+            let snapshot_id = crate::sync::sync_world(&mut store, &world).ok()?;
+            let facts = queries::dex_facts(&store, &world.id, snapshot_id).ok()?;
+            let players = queries::player_progress(&store, snapshot_id).ok()?;
+            let summary = queries::snapshot_summary(&store, snapshot_id).ok()?;
+            Some((dex_with_reference(&facts, &loaded.index), players, summary))
+        });
+
+        // Roster species *plus* every dex entry: the dex grid shows uncaught
+        // species too, and those never appear in the roster. Dumping only
+        // roster species left the "missing" tiles artwork-less in the harness
+        // while the real app renders them fine — a preview that lies about the
+        // screen is worse than no preview.
+        let mut species: std::collections::BTreeSet<String> =
             roster.iter().map(|p| p.character_id.clone()).collect();
+        if let Some((dex, _, _)) = &derived {
+            species.extend(dex.entries.iter().map(|e| e.character_id.clone()));
+        }
         let mut icons = serde_json::Map::new();
         for id in &species {
             let Some(path) = loaded.index.icon_path(id) else { continue };
@@ -657,6 +842,21 @@ mod tests {
         write("pal_roster", serde_json::to_value(&roster).unwrap());
         write("player_flags_detail", serde_json::to_value(&flags).unwrap());
         write("pal_icons", serde_json::Value::Object(icons));
+        if let Some((dex, players, summary)) = &derived {
+            write("dex_progress", serde_json::to_value(dex).unwrap());
+            write("player_progress", serde_json::to_value(players).unwrap());
+            // `list_saves` and `select_world` are what let the harness render
+            // the *whole* App, world picker included — the transition that
+            // took the UI down once already. Without them the preview stops at
+            // the picker with a JSON parse error.
+            write("list_saves", serde_json::to_value(list_saves()).unwrap());
+            write("select_world", serde_json::to_value(summary).unwrap());
+            write("force_resync", serde_json::to_value(summary).unwrap());
+            eprintln!(
+                "fixture: dex {}/{}",
+                dex.unlocked_species_count, dex.total_species_count
+            );
+        }
         eprintln!("fixture: {} pals, {} icons -> {out}", roster.len(), species.len());
     }
 

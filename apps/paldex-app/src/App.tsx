@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import type { SaveRootView, SnapshotSummaryView, World, WorldKind } from "./types";
 import { relativeTime } from "./time";
-import Roster from "./Roster";
+import WorldView from "./WorldView";
 
 type LoadState =
   | { status: "loading" }
@@ -71,7 +71,7 @@ export default function App() {
   // tree on that, which showed up as a black window with no error.
   if (summary) {
     return (
-      <Roster
+      <WorldView
         summary={summary}
         onBack={() => setSummary(null)}
         onSummaryChange={setSummary}

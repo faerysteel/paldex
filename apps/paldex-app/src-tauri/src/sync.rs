@@ -165,7 +165,7 @@ pub fn find_world_by_path(world_path: &Path) -> Option<World> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! Exercises the exact code path the Tauri commands use — `sync_world`
     //! then the `queries` module — against a real save. This is the
     //! integration test for the app-layer glue itself; every crate it calls
@@ -174,7 +174,7 @@ mod tests {
     use super::*;
     use paldex_locate::discover;
 
-    fn real_trackable_world() -> Option<World> {
+    pub(crate) fn real_trackable_world() -> Option<World> {
         if let Ok(dir) = std::env::var("PALDEX_TEST_SAVE_DIR") {
             paldex_locate::resolve_manual(Path::new(&dir))
                 .ok()?
@@ -253,8 +253,12 @@ mod tests {
             "every roster IV should be in 0..=100"
         );
 
-        let dex = crate::queries::dex_progress(&store, &world.id).expect("dex_progress");
-        eprintln!("dex: {} species unlocked", dex.unlocked_species_count);
+        let dex = crate::queries::dex_facts(&store, &world.id, snapshot_id).expect("dex_facts");
+        eprintln!(
+            "dex: {} species unlocked, {} with capture counts",
+            dex.unlocked.len(),
+            dex.capture_counts.len()
+        );
 
         let players = crate::queries::player_progress(&store, snapshot_id).expect("player_progress");
         assert_eq!(players.len() as i64, summary.player_count);
