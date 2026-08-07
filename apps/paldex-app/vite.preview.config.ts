@@ -10,6 +10,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@tauri-apps/api/core": fileURLToPath(new URL("./preview/mock-core.ts", import.meta.url)),
+      "@tauri-apps/api/event": fileURLToPath(new URL("./preview/mock-event.ts", import.meta.url)),
       "@tauri-apps/plugin-dialog": fileURLToPath(
         new URL("./preview/mock-dialog.ts", import.meta.url),
       ),
