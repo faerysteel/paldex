@@ -1,14 +1,15 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import Roster from "../src/Roster";
+import App from "../src/App";
+import ErrorBoundary from "../src/ErrorBoundary";
 import "../src/styles.css";
 
+// Renders the whole App, so world selection — the transition that took the UI
+// down — is exercised, not just the roster in isolation.
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Roster
-      summary={{ snapshotId: 1, palCount: 1955, playerCount: 2, takenAt: Date.now() }}
-      onBack={() => {}}
-      onSummaryChange={() => {}}
-    />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

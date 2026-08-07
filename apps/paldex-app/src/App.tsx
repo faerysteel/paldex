@@ -32,16 +32,6 @@ export default function App() {
     }
   }, []);
 
-  if (summary) {
-    return (
-      <Roster
-        summary={summary}
-        onBack={() => setSummary(null)}
-        onSummaryChange={setSummary}
-      />
-    );
-  }
-
   const scan = useCallback(async () => {
     setState({ status: "loading" });
     setNotice(null);
@@ -74,6 +64,20 @@ export default function App() {
       setNotice(String(e));
     }
   }, []);
+
+  // Every hook above runs on every render. Selecting a world used to return
+  // here *before* `scan`/`chooseFolder` were declared, so the render after
+  // selection ran fewer hooks than the one before it — React aborts the whole
+  // tree on that, which showed up as a black window with no error.
+  if (summary) {
+    return (
+      <Roster
+        summary={summary}
+        onBack={() => setSummary(null)}
+        onSummaryChange={setSummary}
+      />
+    );
+  }
 
   return (
     <div className="app">
