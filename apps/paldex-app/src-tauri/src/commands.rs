@@ -8,13 +8,14 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use paldex_data::{Pak, ReferenceData, ReferenceIndex};
 use paldex_locate::{discover, discover_paks, resolve_manual, SaveRoot, World};
-use paldex_store::Store;
+use paldex_store::{Store, WatchConfig};
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::queries::{self, BaseCampView, DexProgressView, PalView, PlayerProgressView, SnapshotSummaryView};
 use crate::sync;
@@ -30,6 +31,9 @@ pub struct AppState {
     /// The inner `None` means no pak was found — the app stays usable without
     /// the game installed, just with internal ids instead of display names.
     reference: OnceLock<Option<LoadedReference>>,
+    /// Stop flag for the live-sync thread watching the selected world, if one
+    /// is running. Replacing it stops the previous world's watcher.
+    watcher: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 /// The extracted reference index plus the pak it came from.
@@ -81,6 +85,109 @@ struct SelectedWorld {
     world_id: String,
     world_path: PathBuf,
     latest_snapshot_id: i64,
+}
+
+/// Emitted to the frontend after every automatic re-sync that actually
+/// ingested something. Payload is the same [`SnapshotSummaryView`] the manual
+/// Resync button gets back, so the UI can treat both paths identically.
+pub const SNAPSHOT_EVENT: &str = "paldex://snapshot";
+
+/// Watch the selected world's save directory and re-ingest on every in-game
+/// save, emitting [`SNAPSHOT_EVENT`] when the content actually changed.
+///
+/// This is the plan's headline behaviour — "re-syncs within ~10s of every
+/// in-game save, no user action". The watcher runs on its own detached thread
+/// because `watch_until` blocks; the app owns a stop flag so that selecting a
+/// different world tears the previous one down instead of leaving it
+/// re-ingesting behind the new selection.
+///
+/// Failure to start is reported but never fatal: the manual Resync button
+/// remains, so a world that can't be watched is degraded, not broken.
+fn start_watcher(app: &AppHandle, state: &State<AppState>, world: World) {
+    let stop = Arc::new(AtomicBool::new(false));
+    match state.watcher.lock() {
+        Ok(mut guard) => {
+            if let Some(previous) = guard.replace(Arc::clone(&stop)) {
+                previous.store(true, Ordering::Relaxed);
+            }
+        }
+        Err(_) => {
+            eprintln!("[paldex] watcher: lock poisoned, not starting live sync");
+            return;
+        }
+    }
+
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let world_dir = world.path.clone();
+        eprintln!("[paldex] watcher: watching {}", world_dir.display());
+        let result = paldex_store::watch_until(
+            &world_dir,
+            WatchConfig::default(),
+            &stop,
+            |path, _bytes| {
+                // `watch_until` hands over the stability-checked bytes, but a
+                // full sync needs `Players/*.sav` too, so it re-reads the world
+                // rather than using them. The stability check is still what
+                // keeps this from firing mid-write.
+                eprintln!("[paldex] watcher: {} changed", path.display());
+                on_watched_change(&app, &world);
+            },
+        );
+        if let Err(e) = result {
+            eprintln!("[paldex] watcher: stopped with error: {e}");
+        }
+    });
+}
+
+/// One automatic re-sync pass. Runs on the watcher thread.
+fn on_watched_change(app: &AppHandle, world: &World) {
+    let state = app.state::<AppState>();
+
+    let outcome = with_store(app, &state, |store| {
+        sync::sync_world_if_changed(store, world).map_err(|e| e.to_string())
+    });
+
+    let snapshot_id = match outcome {
+        Ok(sync::SyncOutcome::Ingested(id)) => id,
+        Ok(sync::SyncOutcome::Unchanged) => {
+            eprintln!("[paldex] watcher: content unchanged, skipping ingest");
+            return;
+        }
+        Err(e) => {
+            // A torn read that slipped past the stability check parses as
+            // garbage. The next autosave will fire this again, so a transient
+            // failure must not surface as a user-visible error.
+            eprintln!("[paldex] watcher: re-sync failed, will retry on next save: {e}");
+            return;
+        }
+    };
+
+    // The selection can change while a sync is in flight. Publishing a
+    // snapshot for a world the user has already navigated away from would
+    // point the UI at another world's data.
+    match state.selected.lock() {
+        Ok(mut guard) => match guard.as_mut() {
+            Some(selected) if selected.world_id == world.id => {
+                selected.latest_snapshot_id = snapshot_id;
+            }
+            _ => {
+                eprintln!("[paldex] watcher: selection changed mid-sync, dropping snapshot");
+                return;
+            }
+        },
+        Err(_) => return,
+    }
+
+    match with_store(app, &state, |store| queries::snapshot_summary(store, snapshot_id)) {
+        Ok(summary) => {
+            eprintln!("[paldex] watcher: emitting snapshot {snapshot_id}");
+            if let Err(e) = app.emit(SNAPSHOT_EVENT, summary) {
+                eprintln!("[paldex] watcher: emit failed: {e}");
+            }
+        }
+        Err(e) => eprintln!("[paldex] watcher: summary failed: {e}"),
+    }
 }
 
 fn with_store<T>(
@@ -192,6 +299,8 @@ pub fn select_world(
         world_path,
         latest_snapshot_id: snapshot_id,
     });
+
+    start_watcher(&app, &state, world);
 
     eprintln!("[paldex] select_world: ingested snapshot {snapshot_id}");
     with_store(&app, &state, |store| queries::snapshot_summary(store, snapshot_id))

@@ -63,6 +63,18 @@ h2 {
   font-size: 0.9rem;
 }
 
+/* Live-sync affordances. The watcher is invisible by design, so the UI has to
+   say it is running, and say when it has just fired. */
+.watching {
+  margin: 0.15rem 0 0;
+  font-size: 0.8rem;
+}
+
+.live-flash {
+  color: var(--accent, #7cc4ff);
+  font-weight: 600;
+}
+
 .actions {
   display: flex;
   gap: 0.5rem;

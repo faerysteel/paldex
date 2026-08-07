@@ -39,6 +39,37 @@ impl_from_display!(
 /// Decode `world` fresh from disk and ingest it into `store`, returning the
 /// new snapshot's id.
 pub fn sync_world(store: &mut Store, world: &World) -> Result<i64, SyncError> {
+    sync_world_inner(store, world, true).map(|outcome| match outcome {
+        SyncOutcome::Ingested(id) => id,
+        // `force = false` is the only way to get `Unchanged`, and this call
+        // passes `true`.
+        SyncOutcome::Unchanged => unreachable!("forced sync always ingests"),
+    })
+}
+
+/// What a sync did — distinguished because the watcher fires on every write
+/// Palworld makes, and Palworld rewrites `Level.sav` whether or not anything
+/// the tracker cares about changed. Ingesting regardless would grow a snapshot
+/// per autosave and push real history out of the retention window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncOutcome {
+    Ingested(i64),
+    /// The decompressed `Level.sav` hashed identically to the latest stored
+    /// snapshot, so nothing was written.
+    Unchanged,
+}
+
+/// [`sync_world`], but skips ingest when the world's content hash already
+/// matches the newest stored snapshot.
+///
+/// The save still has to be read, decompressed, and hashed to know that — the
+/// short-circuit saves the GVAS parse, the RawData decode, and the write, not
+/// the I/O.
+pub fn sync_world_if_changed(store: &mut Store, world: &World) -> Result<SyncOutcome, SyncError> {
+    sync_world_inner(store, world, false)
+}
+
+fn sync_world_inner(store: &mut Store, world: &World, force: bool) -> Result<SyncOutcome, SyncError> {
     let level_path = world.path.join("Level.sav");
     let raw = std::fs::read(&level_path)?;
     let level_mtime = std::fs::metadata(&level_path)
@@ -49,6 +80,9 @@ pub fn sync_world(store: &mut Store, world: &World) -> Result<i64, SyncError> {
 
     let (gvas, _) = paldex_sav::decompress(&raw)?;
     let level_hash = sha256_hex(&gvas);
+    if !force && store.latest_hash_matches(&world.id, &level_hash)? {
+        return Ok(SyncOutcome::Unchanged);
+    }
     let parsed = paldex_gvas::parse(&gvas)?;
 
     let Some(Value::Struct {
@@ -108,7 +142,7 @@ pub fn sync_world(store: &mut Store, world: &World) -> Result<i64, SyncError> {
 
     store
         .upsert_world(&world.id, "local", &world.id, &world.path.display().to_string())?;
-    Ok(store.ingest_snapshot(&world.id, &input)?)
+    Ok(SyncOutcome::Ingested(store.ingest_snapshot(&world.id, &input)?))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -151,6 +185,47 @@ mod tests {
                 .into_iter()
                 .find_map(|r| r.worlds().into_iter().find(World::is_trackable))
         }
+    }
+
+    /// The watcher fires on every write Palworld makes, and Palworld rewrites
+    /// `Level.sav` on a timer whether or not anything changed. Without this
+    /// short-circuit every autosave would append a snapshot and push real
+    /// history out of the retention window.
+    #[test]
+    fn an_unchanged_world_is_not_re_ingested() {
+        let Some(world) = real_trackable_world() else {
+            eprintln!("skipping: no trackable Palworld world found (set PALDEX_TEST_SAVE_DIR)");
+            return;
+        };
+
+        let mut store = Store::open_in_memory().expect("open in-memory store");
+        let first = sync_world_if_changed(&mut store, &world).expect("first sync");
+        assert!(
+            matches!(first, SyncOutcome::Ingested(_)),
+            "an empty store must ingest, got {first:?}"
+        );
+
+        let second = sync_world_if_changed(&mut store, &world).expect("second sync");
+        assert_eq!(
+            second,
+            SyncOutcome::Unchanged,
+            "re-syncing an untouched world must not create a second snapshot"
+        );
+
+        let count: i64 = store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM snapshots", [], |r| r.get(0))
+            .expect("count snapshots");
+        assert_eq!(count, 1, "expected exactly one snapshot, got {count}");
+
+        // `sync_world` is the forced path behind Resync — it must still ingest
+        // even when nothing changed, or the button would look broken.
+        sync_world(&mut store, &world).expect("forced resync");
+        let forced: i64 = store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM snapshots", [], |r| r.get(0))
+            .expect("count snapshots");
+        assert_eq!(forced, 2, "a forced resync must ingest regardless of the hash");
     }
 
     #[test]

@@ -71,7 +71,9 @@ pub struct BaseCampView {
     pub guild_id: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+/// `Clone` because it doubles as the [`crate::commands::SNAPSHOT_EVENT`]
+/// payload, and Tauri's `emit` requires an owned, cloneable value.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotSummaryView {
     pub snapshot_id: i64,

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import type {
   DexProgressView,
@@ -16,6 +17,11 @@ const ROW_HEIGHT = 48;
 /// Rows rendered beyond the viewport on each side, so a fast scroll doesn't
 /// expose blank space before React catches up.
 const OVERSCAN = 10;
+/// Emitted by the Rust watcher after every automatic re-sync that ingested a
+/// new snapshot. Must match `commands::SNAPSHOT_EVENT`.
+const SNAPSHOT_EVENT = "paldex://snapshot";
+/// How long the "Updated just now" flash stays up after an automatic sync.
+const FLASH_MS = 4000;
 
 type Sort = { column: SortColumn; direction: "asc" | "desc" };
 type SortColumn = "characterId" | "level" | "ivAvg" | "rank";
@@ -38,6 +44,7 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
   const [viewportHeight, setViewportHeight] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [resyncing, setResyncing] = useState(false);
+  const [lastAutoSync, setLastAutoSync] = useState<number | null>(null);
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<Sort>({ column: "level", direction: "desc" });
 
@@ -131,6 +138,32 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
     }
   }, [onSummaryChange]);
 
+  // Live sync. The Rust watcher re-ingests on every in-game save and pushes
+  // the resulting snapshot here; handing it to `onSummaryChange` is enough to
+  // refresh the whole screen, because `load` above is keyed on
+  // `summary.snapshotId`. Nothing here polls.
+  //
+  // Declared unconditionally alongside every other hook — an early return
+  // between hooks is exactly what caused the blank-screen bug in `App.tsx`.
+  useEffect(() => {
+    const pending = listen<SnapshotSummaryView>(SNAPSHOT_EVENT, (event) => {
+      console.info(`[paldex] roster: auto-sync -> snapshot ${event.payload.snapshotId}`);
+      onSummaryChange(event.payload);
+      setLastAutoSync(Date.now());
+    });
+    return () => {
+      void pending.then((unlisten) => unlisten());
+    };
+  }, [onSummaryChange]);
+
+  // A timestamp rather than a boolean, so a second auto-sync arriving while
+  // the first is still showing restarts the flash instead of being swallowed.
+  useEffect(() => {
+    if (lastAutoSync === null) return;
+    const timer = setTimeout(() => setLastAutoSync(null), FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [lastAutoSync]);
+
   const filtered = useMemo(() => {
     if (!pals) return [];
     const needle = filter.trim().toLowerCase();
@@ -190,6 +223,12 @@ export default function Roster({ summary, onBack, onSummaryChange }: Props) {
             {summary.palCount} pals · {summary.playerCount} player
             {summary.playerCount === 1 ? "" : "s"} · synced{" "}
             {relativeTime(summary.takenAt)}
+            {lastAutoSync !== null && (
+              <span className="live-flash"> · updated from a new save</span>
+            )}
+          </p>
+          <p className="muted watching">
+            Watching for in-game saves — the roster updates on its own.
           </p>
         </div>
         <div className="actions">
