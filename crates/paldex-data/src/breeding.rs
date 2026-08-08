@@ -20,37 +20,40 @@
 //! Verified: with a per-tribe pool there are **zero** `CombiRank` collisions,
 //! and `X + X == X` holds for all 261 tribes, which pins the target formula.
 //!
-//! ## The one unverified degree of freedom
+//! ## Ties resolve by the lower Paldeck number
 //!
 //! Every `CombiRank` is a multiple of 10, so whenever `rankA + rankB` is not a
 //! multiple of 20 the target lands exactly halfway between two candidates and
-//! *both* are equally close. This happens for **46% of pairs**, and the pak
-//! does not say which side wins: `DT_PalCombiUnique` is the only breeding
-//! table, so the resolution lives in the game's compiled code.
+//! *both* are equally close. That happens for **46% of pairs**, so the rule
+//! matters a great deal — and the pak does not contain it.
+//! `DT_PalCombiUnique` is the only breeding table; the resolution lives in the
+//! game's compiled code.
 //!
-//! [`TIE_PREFERS_HIGHER_RANK`] encodes the choice. It defaults to the higher
-//! rank because the target formula's own `+1` expresses a round-half-up
-//! intent — but that is an inference, not a measurement. See its docs for the
-//! single in-game check that settles it.
+//! It was therefore settled empirically, by breeding pairs chosen so that the
+//! competing rules predict different children:
+//!
+//! | pair | target | result | eliminates |
+//! | --- | --- | --- | --- |
+//! | Lamball + Chikipi | 3065 | **Vixy** (3060, Paldeck 6) | highest `CombiRank` and lowest row index, which both predict Teafant (3070, Paldeck 11, row 362 vs 436) |
+//! | Lamball + Fuack | 3015 | **Lifmunk** (3020, Paldeck 4) | lowest `CombiRank`, which predicts Sparkit (3010, Paldeck 42) |
+//!
+//! Lifmunk is the *higher*-ranked of its tied pair and Vixy the lower, so no
+//! rank-ordering rule explains both. The lower `ZukanIndex` wins in each case,
+//! and that is what [`BreedingIndex::child_of`] implements.
+//!
+//! Note this only makes sense because a tie is always between exactly two
+//! candidates: the per-tribe pool has no duplicate ranks, so the two tied
+//! entries sit one step either side of the target.
 
 use std::collections::HashMap;
-
-/// On a tie, prefer the candidate with the **higher** `CombiRank`.
-///
-/// Unverified — see the module docs. To settle it, breed **Lamball + Cattiva**
-/// in game, a pair with no unique-combo override:
-///
-/// - `true` (current) predicts **Depresso**
-/// - `false` predicts **Tanzee**
-///
-/// Flip this constant if the game disagrees; `breeding_lamball_cattiva` in
-/// `tests/real_breeding.rs` pins whichever answer is correct.
-pub const TIE_PREFERS_HIGHER_RANK: bool = true;
 
 /// A species eligible to be produced by the generic rule.
 #[derive(Debug, Clone)]
 struct Candidate {
     rank: u32,
+    /// Paldeck number, which is what resolves a tie. Zero for a species with
+    /// no Paldeck entry, which sorts it last rather than first.
+    zukan: u32,
     tribe: String,
     character_id: String,
 }
@@ -75,7 +78,8 @@ pub(crate) struct SpeciesRow<'a> {
     /// Excluded from being *produced* by the generic rule, though still
     /// usable as a parent.
     pub ignore_combi: bool,
-    pub has_dex_number: bool,
+    /// Paldeck number, or zero when the species has no Paldeck entry.
+    pub zukan: u32,
 }
 
 /// Breeding lookups over the whole species set.
@@ -112,7 +116,7 @@ impl BreedingIndex {
             rank,
             is_pal,
             ignore_combi,
-            has_dex_number,
+            zukan,
         } = row;
         if tribe.is_empty() || rank == 0 || rank >= RANK_SENTINEL {
             return;
@@ -133,7 +137,7 @@ impl BreedingIndex {
         // quest duplicates (`Quest_Farmer03_SheepBall`) and unique-combo-only
         // variants (`PlantSlime_Flower`) enter the pool and collide on rank
         // with the species they shadow.
-        let score = (character_id.eq_ignore_ascii_case(tribe), has_dex_number);
+        let score = (character_id.eq_ignore_ascii_case(tribe), zukan > 0);
         match self
             .pool
             .iter_mut()
@@ -142,15 +146,17 @@ impl BreedingIndex {
             Some(existing) => {
                 let current = (
                     existing.character_id.eq_ignore_ascii_case(tribe),
-                    existing.rank > 0,
+                    existing.zukan > 0,
                 );
                 if score > current {
                     existing.rank = rank;
+                    existing.zukan = zukan;
                     existing.character_id = character_id.to_owned();
                 }
             }
             None => self.pool.push(Candidate {
                 rank,
+                zukan,
                 tribe: tribe.to_owned(),
                 character_id: character_id.to_owned(),
             }),
@@ -201,13 +207,16 @@ impl BreedingIndex {
         let target = (pa.rank + pb.rank).div_ceil(2);
 
         let best = self.pool.iter().map(|c| c.rank.abs_diff(target)).min()?;
-        let mut tied = self.pool.iter().filter(|c| c.rank.abs_diff(target) == best);
-        let chosen = if TIE_PREFERS_HIGHER_RANK {
-            tied.next_back()
-        } else {
-            tied.next()
-        };
-        chosen.map(|c| c.character_id.as_str())
+
+        // Ties go to the lower Paldeck number — see the module docs for the
+        // two in-game results that establish this. A species with no Paldeck
+        // entry sorts last rather than first, since zero would otherwise beat
+        // every real number.
+        self.pool
+            .iter()
+            .filter(|c| c.rank.abs_diff(target) == best)
+            .min_by_key(|c| if c.zukan == 0 { u32::MAX } else { c.zukan })
+            .map(|c| c.character_id.as_str())
     }
 }
 
@@ -225,7 +234,7 @@ mod tests {
             tribe: &str,
             rank: u32,
             ignore_combi: bool,
-            has_dex: bool,
+            zukan: u32,
         ) {
             b.add_species(&SpeciesRow {
                 key,
@@ -234,16 +243,18 @@ mod tests {
                 rank,
                 is_pal: true,
                 ignore_combi,
-                has_dex_number: has_dex,
+                zukan,
             });
         }
-        add(&mut b, "a", "A", "TribeA", 100, false, true);
-        add(&mut b, "b", "B", "TribeB", 110, false, true);
-        add(&mut b, "c", "C", "TribeC", 120, false, true);
+        // Paldeck numbers deliberately run opposite to rank so the two
+        // tie-break rules are distinguishable here.
+        add(&mut b, "a", "A", "TribeA", 100, false, 20);
+        add(&mut b, "b", "B", "TribeB", 110, false, 10);
+        add(&mut b, "c", "C", "TribeC", 120, false, 30);
         // A quest duplicate of TribeA must not enter the pool.
-        add(&mut b, "quest_a", "Quest_A", "TribeA", 100, false, false);
+        add(&mut b, "quest_a", "Quest_A", "TribeA", 100, false, 0);
         // Excluded from being a child, but still usable as a parent.
-        add(&mut b, "x", "X", "TribeX", 130, true, true);
+        add(&mut b, "x", "X", "TribeX", 130, true, 40);
         b.finish();
         b
     }
@@ -275,11 +286,11 @@ mod tests {
     }
 
     #[test]
-    fn a_tie_follows_the_documented_preference() {
+    fn a_tie_goes_to_the_lower_paldeck_number() {
         let b = index();
-        // (100 + 110 + 1) / 2 = 105 — equidistant from 100 and 110.
-        let expected = if TIE_PREFERS_HIGHER_RANK { "B" } else { "A" };
-        assert_eq!(b.child_of("a", "b"), Some(expected));
+        // (100 + 110 + 1) / 2 = 105 — equidistant from 100 and 110. A has the
+        // lower rank but B has the lower Paldeck number, so B must win.
+        assert_eq!(b.child_of("a", "b"), Some("B"));
     }
 
     #[test]

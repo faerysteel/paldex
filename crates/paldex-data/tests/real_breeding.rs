@@ -1,14 +1,12 @@
 //! Integration tests for breeding against the real installed pak.
 //!
-//! Everything the pak determines is asserted exactly. The one thing it does
-//! not determine — how a rank tie resolves — is isolated in
-//! [`breeding_lamball_cattiva`], which is written against
-//! [`breeding::TIE_PREFERS_HIGHER_RANK`] so that flipping the constant flips
-//! the expectation rather than leaving a stale hard-coded answer behind.
+//! Everything the pak determines is asserted exactly. The rank tie-break,
+//! which the pak does *not* determine, is pinned by two results confirmed by
+//! breeding the pairs in game — see the [`paldex_data::breeding`] module docs
+//! for how those two pairs between them eliminate every competing rule.
 
 use std::path::PathBuf;
 
-use paldex_data::breeding::TIE_PREFERS_HIGHER_RANK;
 use paldex_data::{Pak, ReferenceData, ReferenceIndex};
 
 fn real_index() -> Option<ReferenceIndex> {
@@ -138,26 +136,53 @@ fn unknown_parents_return_nothing() {
     assert_eq!(index.breeding_result("SheepBall", "NotAPal"), None);
 }
 
-/// The tie-break canary.
+/// Confirmed in game: Lamball + Chikipi produces **Vixy**.
 ///
-/// Lamball + Cattiva has no unique-combo override and lands exactly between
-/// two candidate ranks, so it distinguishes the two possible conventions.
-/// **Breed this pair in game to settle it**: if the result is not what this
-/// asserts, flip [`TIE_PREFERS_HIGHER_RANK`].
+/// Target rank 3065 leaves Vixy (`CuteFox`, rank 3060, Paldeck 6) and Teafant
+/// (`Ganesha`, rank 3070, Paldeck 11) both at distance 5. Vixy winning
+/// disproves two candidate rules outright — "highest `CombiRank`" and "first
+/// row in the table", which both predict Teafant (rows 436 vs 362).
+///
+/// This is ground truth, so it is asserted unconditionally: any tie-break rule
+/// that breaks it is wrong regardless of how appealing it looks.
 #[test]
-fn breeding_lamball_cattiva() {
+fn breeding_lamball_chikipi_is_vixy() {
     let index = index!();
+    assert_eq!(index.breeding_result("SheepBall", "ChickenPal"), Some("CuteFox"));
+}
 
-    let expected = if TIE_PREFERS_HIGHER_RANK {
-        "DreamDemon"
-    } else {
-        "Monkey"
-    };
-    let got = index.breeding_result("SheepBall", "PinkCat");
-    eprintln!("Lamball + Cattiva = {got:?} (TIE_PREFERS_HIGHER_RANK = {TIE_PREFERS_HIGHER_RANK})");
+/// Confirmed in game: Lamball + Fuack produces **Lifmunk**.
+///
+/// Target rank 3015 ties Sparkit (`ElecCat`, rank 3010, Paldeck 42) with
+/// Lifmunk (`Carbunclo`, rank 3020, Paldeck 4). Lifmunk is the *higher*-ranked
+/// of the two, which is what rules out "lowest `CombiRank` wins" — the only
+/// rank-based rule still standing after the Vixy result above.
+///
+/// Together the two confirmed pairs leave the lower Paldeck number as the sole
+/// surviving explanation.
+#[test]
+fn breeding_lamball_fuack_is_lifmunk() {
+    let index = index!();
     assert_eq!(
-        got,
-        Some(expected),
-        "the tie-break constant and this expectation have drifted apart"
+        index.breeding_result("SheepBall", "BluePlatypus"),
+        Some("Carbunclo")
+    );
+}
+
+/// A tie whose candidates order the same way under both `CombiRank` and
+/// `ZukanIndex`, kept as an explicit contrast to the two confirmed pairs.
+///
+/// Lamball + Cattiva targets rank 2905, leaving Monkey (Tanzee, 2900,
+/// Paldeck 23) and DreamDemon (Daedream, 2910, Paldeck 22) both at distance 5.
+/// Daedream is the higher-ranked *and* the lower-numbered candidate, so this
+/// pair agrees with several rules at once — it is kept as a reminder that a
+/// passing tie-break test proves nothing unless the pair was chosen to
+/// discriminate.
+#[test]
+fn a_tie_that_cannot_discriminate() {
+    let index = index!();
+    assert_eq!(
+        index.breeding_result("SheepBall", "PinkCat"),
+        Some("DreamDemon")
     );
 }

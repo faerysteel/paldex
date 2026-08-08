@@ -317,10 +317,11 @@ impl ReferenceIndex {
                     rank: props.get("CombiRank").and_then(Value::as_i32).unwrap_or(0).max(0) as u32,
                     is_pal: props.get("IsPal").and_then(Value::as_bool).unwrap_or(false),
                     ignore_combi: props.get("IgnoreCombi").and_then(Value::as_bool).unwrap_or(false),
-                    has_dex_number: props
+                    zukan: props
                         .get("ZukanIndex")
                         .and_then(Value::as_i32)
-                        .is_some_and(|n| n > 0),
+                        .unwrap_or(0)
+                        .max(0) as u32,
                 });
 
                 let Some(species) = self.species.get_mut(&key) else {
