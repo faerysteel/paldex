@@ -1,14 +1,11 @@
 //! Builds the reference index from the user's own installed pak.
 //!
-//! ## What is and isn't obtainable
+//! ## Where each field comes from
 //!
-//! Palworld's `DataTable` packages set `PKG_UnversionedProperties`, so numeric
-//! row *values* (stats, elements, work suitabilities, dex numbers, breeding
-//! combos) need a `.usmap` schema that doesn't exist for this build — see
-//! [`crate::reference`] for that writeup, which still stands.
-//!
-//! Two things survive that restriction, and between them they cover most of
-//! what the tracker actually displays:
+//! Palworld's `DataTable` packages set `PKG_UnversionedProperties`, so row
+//! values carry no names or types. Three mechanisms cover everything the
+//! tracker needs, and all three read the user's own installation — nothing is
+//! redistributed and no third-party dataset is vendored:
 //!
 //! 1. **Name tables** are plain `FString`s in every cooked package, so
 //!    `DT_PalMonsterParameter` and `DT_PalHumanParameter` yield the full set of
@@ -19,14 +16,17 @@
 //!    `FString`s regardless of the surrounding schema (see
 //!    [`crate::text_table`]), giving real display names for species, skills,
 //!    technologies, items, and map objects in every shipped language.
-//!
-//! All of it comes from the user's own installation at runtime, so nothing is
-//! redistributed and no third-party dataset is vendored.
+//! 3. **Row values** — Paldeck numbers, base stats, elements, rarity and work
+//!    suitabilities — are decoded against the bundled `Mappings.usmap` by
+//!    [`crate::datatable`]. This is what retired the vendored dex-number
+//!    table that previously stood in for `ZukanIndex`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::reference::{PassiveSkill, Species};
-use crate::{text_table, uasset, Pak, PakError};
+use crate::reference::{BaseStats, PassiveSkill, Species};
+use crate::unversioned::{Properties, Value};
+use crate::usmap::Usmap;
+use crate::{datatable, text_table, uasset, Pak, PakError};
 
 /// Languages shipped in the pak.
 ///
@@ -111,6 +111,67 @@ pub struct ReferenceIndex {
     /// Species key -> pak entry base path (no extension) for its icon.
     icon_paths: HashMap<String, String>,
     language: String,
+    /// Non-fatal problems hit during extraction, for diagnostics.
+    warnings: Vec<String>,
+}
+
+/// The enum entry the game uses for "no element", which is stored in the
+/// second slot of every single-element species.
+const NO_ELEMENT: &str = "None";
+
+/// Property-name prefix for the per-job suitability levels.
+const WORK_SUITABILITY_PREFIX: &str = "WorkSuitability_";
+
+/// How well a row represents the species it normalizes onto.
+///
+/// A row naming the species outright beats one that only reaches it after a
+/// `BOSS_`/`PREDATOR_` prefix is stripped, and among equals the one carrying a
+/// Paldeck number wins. Without this, the alpha form of a species — stored
+/// with `ZukanIndex = -1` — silently erases the base form's number, which cost
+/// 36 species their Paldeck entry when rows were applied in file order.
+fn row_rank(row_name: &str, normalized_key: &str, row: &Properties) -> u8 {
+    let is_exact = row_name.eq_ignore_ascii_case(normalized_key);
+    let has_dex = row.get("ZukanIndex").and_then(Value::as_i32).is_some_and(|n| n > 0);
+    u8::from(is_exact) * 2 + u8::from(has_dex)
+}
+
+/// Copy one `DT_PalMonsterParameter` row onto the species it describes.
+///
+/// A `ZukanIndex` of zero or below means "not in the Paldeck" — raid bosses
+/// and quest-only variants store `-1` — so it maps to `None` rather than to a
+/// number, preserving the distinction [`Species::dex_number`] documents.
+fn apply_row(species: &mut Species, row: &Properties) {
+    let int = |key: &str| row.get(key).and_then(Value::as_i32);
+
+    species.dex_number = int("ZukanIndex").filter(|n| *n > 0).map(|n| n as u32);
+    species.dex_suffix =
+        row.get("ZukanIndexSuffix").and_then(Value::as_str).unwrap_or_default().to_owned();
+    species.rarity = int("Rarity").unwrap_or(0).max(0) as u32;
+
+    species.elements = ["ElementType1", "ElementType2"]
+        .iter()
+        .filter_map(|key| row.get(*key).and_then(Value::as_str))
+        .filter(|e| !e.is_empty() && *e != NO_ELEMENT)
+        .map(str::to_owned)
+        .collect();
+
+    species.stats = BaseStats {
+        hp: int("Hp").unwrap_or(0).max(0) as u32,
+        melee_attack: int("MeleeAttack").unwrap_or(0).max(0) as u32,
+        shot_attack: int("ShotAttack").unwrap_or(0).max(0) as u32,
+        defense: int("Defense").unwrap_or(0).max(0) as u32,
+        support: int("Support").unwrap_or(0).max(0) as u32,
+        craft_speed: int("CraftSpeed").unwrap_or(0).max(0) as u32,
+    };
+
+    species.work_suitabilities = row
+        .iter()
+        .filter_map(|(key, value)| {
+            let job = key.strip_prefix(WORK_SUITABILITY_PREFIX)?;
+            let level = value.as_i32()?;
+            (level > 0).then(|| (job.to_owned(), level as u32))
+        })
+        .collect::<BTreeMap<_, _>>();
 }
 
 impl ReferenceIndex {
@@ -141,13 +202,12 @@ impl ReferenceIndex {
                     // lookup key is normalized.
                     character_id: character_id.to_owned(),
                     display_name: display.unwrap_or_else(|| character_id.to_owned()),
-                    dex_number: None,
-                    dex_suffix: String::new(),
+                    ..Default::default()
                 },
             );
         }
 
-        index.apply_dex_numbers();
+        index.apply_parameters(pak);
 
         for entry in read_text_table(pak, &text_root, SKILL_NAMES.0)? {
             let display_name = entry.display().unwrap_or_else(|| entry.key.clone());
@@ -192,35 +252,64 @@ impl ReferenceIndex {
         Ok(index)
     }
 
-    /// Paldeck numbers, keyed by internal `CharacterID`.
+    /// The property schema for Palworld's cooked packages.
     ///
-    /// Vendored rather than extracted: `ZukanIndex` is a numeric DataTable
-    /// field, and the pak sets `PKG_UnversionedProperties`, so reading it
-    /// needs a `.usmap` that doesn't exist for this build. Everything else the
-    /// index holds still comes from the user's own pak. See the file header
-    /// for provenance and how it was validated against this game build.
-    const DEX_NUMBERS: &'static str = include_str!("../data/dex_numbers.tsv");
+    /// Bundled because the game ships none: its `DataTable`s set
+    /// `PKG_UnversionedProperties`, so row values carry no names or types and
+    /// are matched positionally against this. Regenerate with
+    /// `tools/usmap/regen-usmap.sh` after a game update.
+    const MAPPINGS: &'static [u8] = crate::BUNDLED_MAPPINGS;
 
-    /// Attach Paldeck numbers to the species read from the pak.
+    /// Attach Paldeck numbers, elements, stats, rarity and work suitabilities
+    /// from `DT_PalMonsterParameter`.
     ///
-    /// Species absent from the table keep `dex_number: None`, which is
-    /// meaningful rather than missing data — those are the tower bosses, raid
-    /// content, and unused entries that have no Paldeck entry in game either.
-    fn apply_dex_numbers(&mut self) {
-        for line in Self::DEX_NUMBERS.lines() {
-            if line.starts_with('#') || line.trim().is_empty() {
-                continue;
+    /// Failure here is reported as a warning rather than an error: names,
+    /// classification and artwork are all schema-free and still correct
+    /// without it, so a game patch that moves this table should degrade the
+    /// tracker rather than break it. The `real_parameters` tests assert the
+    /// data really is present, so a silent regression still fails the suite.
+    fn apply_parameters(&mut self, pak: &mut Pak) {
+        let usmap = match Usmap::parse(Self::MAPPINGS) {
+            Ok(m) => m,
+            Err(e) => {
+                self.warnings.push(format!("bundled Mappings.usmap is unusable: {e}"));
+                return;
             }
-            let mut fields = line.split('\t');
-            let (Some(character_id), Some(index)) = (fields.next(), fields.next()) else {
+        };
+
+        // Several rows can normalize onto one species: `AmaterasuWolf`, its
+        // alpha `BOSS_AmaterasuWolf`, and quest-only duplicates all collapse
+        // to the same key. They are not interchangeable — variant rows store
+        // `ZukanIndex = -1` and boosted stats — so rows are ranked and only a
+        // better one is allowed to overwrite.
+        let mut best: HashMap<String, u8> = HashMap::new();
+
+        for entry in MONSTER_PARAMS {
+            let base = entry.trim_end_matches(".uasset");
+            let (Ok(uasset), Ok(uexp)) =
+                (pak.read(entry), pak.read(&format!("{base}.uexp")))
+            else {
                 continue;
             };
-            let Ok(number) = index.parse::<u32>() else { continue };
-            let suffix = fields.next().unwrap_or("").trim();
-
-            if let Some(species) = self.species.get_mut(&normalize_key(character_id)) {
-                species.dex_number = Some(number);
-                species.dex_suffix = suffix.to_owned();
+            let table = match datatable::read(&uasset, &uexp, &usmap) {
+                Ok(t) => t,
+                Err(e) => {
+                    self.warnings.push(format!("reading {base}: {e}"));
+                    continue;
+                }
+            };
+            for row in &table.rows {
+                let key = normalize_key(&row.name);
+                let Some(species) = self.species.get_mut(&key) else {
+                    continue;
+                };
+                let rank = row_rank(&row.name, &key, &row.properties);
+                // `>=` rather than `>` so a later row of equal rank still
+                // wins, matching the engine's own last-insert-wins `RowMap`.
+                if rank >= *best.get(&key).unwrap_or(&0) {
+                    best.insert(key, rank);
+                    apply_row(species, &row.properties);
+                }
             }
         }
     }
@@ -232,6 +321,13 @@ impl ReferenceIndex {
         self.species.values().filter(|s| s.dex_number.is_some()).count()
     }
 
+    /// Non-fatal problems hit while extracting, e.g. a parameter table that
+    /// moved in a game update. Empty on a healthy extraction.
+    #[must_use]
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
     #[must_use]
     pub fn language(&self) -> &str {
         &self.language
@@ -239,11 +335,9 @@ impl ReferenceIndex {
 
     /// Number of named species — one per row of `DT_PalNameText_Common`.
     ///
-    /// This is *close to* but not exactly the in-game Paldeck denominator:
-    /// without dex numbers (which need a `.usmap`) there is no way to tell a
-    /// Paldeck-listed species from a quest-only or cut one. Treat it as an
-    /// upper bound, and prefer the save's own `PaldeckUnlockFlag` key set when
-    /// an authoritative denominator is required.
+    /// An upper bound on the Paldeck rather than the Paldeck itself: it counts
+    /// quest-only and cut entries too. Use [`Self::dex_entry_count`] for the
+    /// real denominator, which the game's own `ZukanIndex` now supplies.
     #[must_use]
     pub fn species_count(&self) -> usize {
         self.species.len()
@@ -421,8 +515,9 @@ impl crate::reference::ReferenceData for ReferenceIndex {
             .or_else(|| self.passives.get(&format!("{PASSIVE_KEY_PREFIX}{id}")))
     }
 
-    /// Breeding combos live in an unversioned `DataTable` and remain
-    /// unavailable without a `.usmap`.
+    /// Breeding combos live in their own `DataTable`, which this index does
+    /// not read yet. The schema is no longer the obstacle — [`crate::datatable`]
+    /// can decode it — only the table-specific joining work.
     fn breeding_result(&self, _a: &str, _b: &str) -> Option<&str> {
         None
     }
@@ -463,8 +558,7 @@ mod tests {
             Species {
                 character_id: "Anubis".into(),
                 display_name: "Anubis".into(),
-                dex_number: None,
-                dex_suffix: String::new(),
+                ..Default::default()
             },
         );
         index.human_npc_ids.insert("anubis".into());
