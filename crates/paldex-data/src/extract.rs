@@ -23,6 +23,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use crate::breeding::{BreedingIndex, SpeciesRow};
 use crate::reference::{BaseStats, PassiveSkill, Species};
 use crate::unversioned::{Properties, Value};
 use crate::usmap::Usmap;
@@ -48,6 +49,9 @@ const MONSTER_PARAMS: &[&str] = &[
     "Pal/Content/Pal/DataTable/Character/DT_PalMonsterParameter.uasset",
     "Pal/Content/Pal/DataTable/Character/DT_PalMonsterParameter_Common.uasset",
 ];
+/// Parent pairings that override the generic breeding rule.
+const COMBI_UNIQUE: &str = "Pal/Content/Pal/DataTable/Character/DT_PalCombiUnique.uasset";
+
 const HUMAN_PARAMS: &[&str] = &[
     "Pal/Content/Pal/DataTable/Character/DT_PalHumanParameter.uasset",
     "Pal/Content/Pal/DataTable/Character/DT_PalHumanParameter_Common.uasset",
@@ -111,6 +115,8 @@ pub struct ReferenceIndex {
     /// Species key -> pak entry base path (no extension) for its icon.
     icon_paths: HashMap<String, String>,
     language: String,
+    /// Breeding rules, keyed on tribe — see [`crate::breeding`].
+    breeding: BreedingIndex,
     /// Non-fatal problems hit during extraction, for diagnostics.
     warnings: Vec<String>,
 }
@@ -300,17 +306,66 @@ impl ReferenceIndex {
             };
             for row in &table.rows {
                 let key = normalize_key(&row.name);
+                let props = &row.properties;
+
+                // Breeding keys on tribe and needs every row, including the
+                // variants that lose the ranking below.
+                self.breeding.add_species(&SpeciesRow {
+                    key: &key,
+                    character_id: &row.name,
+                    tribe: props.get("Tribe").and_then(Value::as_str).unwrap_or_default(),
+                    rank: props.get("CombiRank").and_then(Value::as_i32).unwrap_or(0).max(0) as u32,
+                    is_pal: props.get("IsPal").and_then(Value::as_bool).unwrap_or(false),
+                    ignore_combi: props.get("IgnoreCombi").and_then(Value::as_bool).unwrap_or(false),
+                    has_dex_number: props
+                        .get("ZukanIndex")
+                        .and_then(Value::as_i32)
+                        .is_some_and(|n| n > 0),
+                });
+
                 let Some(species) = self.species.get_mut(&key) else {
                     continue;
                 };
-                let rank = row_rank(&row.name, &key, &row.properties);
+                let rank = row_rank(&row.name, &key, props);
                 // `>=` rather than `>` so a later row of equal rank still
                 // wins, matching the engine's own last-insert-wins `RowMap`.
                 if rank >= *best.get(&key).unwrap_or(&0) {
                     best.insert(key, rank);
-                    apply_row(species, &row.properties);
+                    apply_row(species, props);
                 }
             }
+        }
+
+        self.read_unique_combos(pak, &usmap);
+        self.breeding.finish();
+    }
+
+    /// Load the unique parent-pair overrides from `DT_PalCombiUnique`.
+    ///
+    /// Reported as a warning rather than an error: without it the generic
+    /// `CombiRank` rule still answers every pair, just without the 258
+    /// hand-authored exceptions.
+    fn read_unique_combos(&mut self, pak: &mut Pak, usmap: &Usmap) {
+        let base = COMBI_UNIQUE.trim_end_matches(".uasset");
+        let (Ok(uasset), Ok(uexp)) = (pak.read(COMBI_UNIQUE), pak.read(&format!("{base}.uexp")))
+        else {
+            self.warnings.push(format!("{base} is missing from the pak"));
+            return;
+        };
+        let table = match datatable::read(&uasset, &uexp, usmap) {
+            Ok(t) => t,
+            Err(e) => {
+                self.warnings.push(format!("reading {base}: {e}"));
+                return;
+            }
+        };
+        for row in &table.rows {
+            let get = |k: &str| row.properties.get(k).and_then(Value::as_str).unwrap_or_default();
+            self.breeding.add_unique(
+                get("ParentTribeA"),
+                get("ParentTribeB"),
+                get("ChildCharacterID"),
+            );
         }
     }
 
@@ -515,11 +570,10 @@ impl crate::reference::ReferenceData for ReferenceIndex {
             .or_else(|| self.passives.get(&format!("{PASSIVE_KEY_PREFIX}{id}")))
     }
 
-    /// Breeding combos live in their own `DataTable`, which this index does
-    /// not read yet. The schema is no longer the obstacle — [`crate::datatable`]
-    /// can decode it — only the table-specific joining work.
-    fn breeding_result(&self, _a: &str, _b: &str) -> Option<&str> {
-        None
+    /// Resolved from `DT_PalCombiUnique` first, then the generic `CombiRank`
+    /// rule — see [`crate::breeding`].
+    fn breeding_result(&self, a: &str, b: &str) -> Option<&str> {
+        self.breeding.child_of(&normalize_key(a), &normalize_key(b))
     }
 
     fn icon_path(&self, character_id: &str) -> Option<&str> {

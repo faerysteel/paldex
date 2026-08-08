@@ -13,6 +13,7 @@ use std::fs::File;
 use std::io::{BufReader, Seek};
 use std::path::Path;
 
+pub mod breeding;
 pub mod datatable;
 mod extract;
 mod reference;
