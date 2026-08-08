@@ -13,12 +13,23 @@ use std::fs::File;
 use std::io::{BufReader, Seek};
 use std::path::Path;
 
+pub mod datatable;
 mod extract;
 mod reference;
 pub mod text_table;
 pub mod texture;
 pub mod uasset;
+pub mod unversioned;
+pub mod usmap;
 pub use extract::{ExtractError, ReferenceIndex, TEXT_LANGUAGES};
+
+/// The property schema for Palworld's cooked packages, bundled because the
+/// game ships none of its own.
+///
+/// Regenerate with `tools/usmap/regen-usmap.sh` after a game update; see that
+/// directory's README for why the stock mappings dumper needs patching for
+/// this build.
+pub const BUNDLED_MAPPINGS: &[u8] = include_bytes!("../data/Mappings.usmap");
 pub use reference::{PassiveSkill, PassthroughReferenceData, ReferenceData, Species};
 pub use repak_oodle::{PakBuilder, PakReader};
 
