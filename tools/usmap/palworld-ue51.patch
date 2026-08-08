@@ -1,0 +1,115 @@
+diff --git a/UnrealMappingsDumper/app.cpp b/UnrealMappingsDumper/app.cpp
+index 34b9cf0..9aec494 100644
+--- a/UnrealMappingsDumper/app.cpp
++++ b/UnrealMappingsDumper/app.cpp
+@@ -63,6 +63,14 @@ static bool InitEngine(GameInstance& Game)
+ 	}
+ 	
+ 
++	// Palworld is UE 5.1, which still has the 16-byte FFieldVariant (bIsUObject
++	// present) and so FProperty is 0x78, not the 0x70 of the 5.3 preset.
++	if (Game.GamePath.filename() == "Palworld-Win64-Shipping.exe")
++	{
++		wprintf(L"Palworld: using UE5.1 (base 0x78) layout...\n");
++		return IUnrealVersion::InitTypes<UnrealVersionBase>();
++	}
++
+ 	if(Game.Version >= 5.0)
+ 	{
+ 		wprintf(L"Use UE5 UnrealVersion... \n");
+diff --git a/UnrealMappingsDumper/dllmain.cpp b/UnrealMappingsDumper/dllmain.cpp
+index 2d3fcc2..c1b6d1f 100644
+--- a/UnrealMappingsDumper/dllmain.cpp
++++ b/UnrealMappingsDumper/dllmain.cpp
+@@ -10,8 +10,15 @@ void WINAPI Main(HMODULE Module)
+ 	if constexpr (OpenConsole)
+ 	{
+ 		AllocConsole();
+-		FILE* f;
+-		freopen_s(&f, "CONOUT$", "w", stdout);
++		FILE* f = nullptr;
++		if (freopen_s(&f, "C:\\dumper\\dumper.log", "w", stdout) != 0 || !f)
++		{
++			wchar_t tmpdir[MAX_PATH]{};
++			GetTempPathW(MAX_PATH, tmpdir);
++			std::wstring alt = std::wstring(tmpdir) + L"dumper.log";
++			_wfreopen_s(&f, alt.c_str(), L"w", stdout);
++		}
++		if (f) setvbuf(stdout, NULL, _IONBF, 0);
+ 	}
+ 
+ 	UE_LOG("Unreal Mappings Dumper injected, waiting for engine initialization...");
+diff --git a/UnrealMappingsDumper/dumper.cpp b/UnrealMappingsDumper/dumper.cpp
+index ce2fae8..2adefb2 100644
+--- a/UnrealMappingsDumper/dumper.cpp
++++ b/UnrealMappingsDumper/dumper.cpp
+@@ -1,5 +1,6 @@
+ #include "pch.h"
+ 
++#include "app.h"
+ #include "dumper.h"
+ #include "writer.h"
+ #include "oodle.h"
+@@ -233,7 +234,7 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
+ 			{
+ 				auto Struct = static_cast<UStruct*>(Object);
+ 				wprintf(L"Struct: ");
+-				wprintf(Struct->GetName().data());
++				wprintf(L"%s", Struct->GetName().data());
+ 				wprintf(L"\n");
+ 				
+ 				Structs.push_back(Struct);
+@@ -256,14 +257,20 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
+ 				auto Enum = static_cast<UEnum*>(Object);
+ 				Enums.push_back(Enum);
+ 				wprintf(L"Enum: ");
+-				wprintf(Enum->GetName().data());
++				wprintf(L"%s", Enum->GetName().data());
+ 				wprintf(L"\n");
+ 
+ 				NameMap.insert_or_assign(Enum->GetFName(), 0);
+ 
+ 				auto& EnumNames = Enum->Names();
++				int WalkCount = EnumNames.Num();
++				if (WalkCount < 0 || WalkCount > 65536)
++				{
++					UE_LOG("BOGUS enum in walk: %ls Num=%d", Enum->GetName().data(), WalkCount);
++					WalkCount = 0;
++				}
+ 
+-				for (auto i = 0; i < EnumNames.Num(); i++)
++				for (int i = 0; i < WalkCount; i++)
+ 				{
+ 					NameMap.insert_or_assign(EnumNames[i].Key.GetNumber(), 0);
+ 				}
+@@ -302,9 +309,15 @@ void Dumper::Run(ECompressionMethod CompressionMethod)
+ 		Buffer.Write(NameMap[Enum->GetFName()]);
+ 
+ 		auto& EnumNames = Enum->Names();
+-		Buffer.Write<int>(EnumNames.Num()); // some game may have more than 255 enum values
++		int EnumCount = EnumNames.Num();
++		if (EnumCount < 0 || EnumCount > 65536)
++		{
++			UE_LOG("BOGUS enum write Num=%d, skipping", EnumCount);
++			EnumCount = 0;
++		}
++		Buffer.Write<int>(EnumCount); // some game may have more than 255 enum values
+ 
+-		for (size_t i = 0; i < EnumNames.Num(); i++)
++		for (int i = 0; i < EnumCount; i++)
+ 		{
+ 			Buffer.Write<int>(NameMap[EnumNames[i].Key]);
+ 		}
+diff --git a/UnrealMappingsDumper/unrealTypes.h b/UnrealMappingsDumper/unrealTypes.h
+index 4cc23c7..13cef98 100644
+--- a/UnrealMappingsDumper/unrealTypes.h
++++ b/UnrealMappingsDumper/unrealTypes.h
+@@ -402,7 +402,7 @@ public:
+ 	{
+ 		static auto FieldSize = ObjObjects::FindObject<UStruct>(L"/Script/CoreUObject.Field")->PropertiesSize();
+ 
+-		return QUICK_OFFSET(EnumNameMap, FieldSize + sizeof(FString));
++		return QUICK_OFFSET(EnumNameMap, FieldSize + sizeof(FString) + 8); // UE5.1: ECppForm/EEnumFlags sit between CppType and Names
+ 	}
+ 
+ 	DECLARE_STATIC_CLASS(L"/Script/CoreUObject.Enum");

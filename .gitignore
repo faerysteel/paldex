@@ -22,3 +22,6 @@ apps/paldex-app/src-tauri/gen
 
 # Preview-harness fixtures, generated from a personal save (see apps/paldex-app/preview/README.md)
 apps/paldex-app/public/__fixture__/
+
+# Python bytecode (tools/usmap)
+__pycache__/
