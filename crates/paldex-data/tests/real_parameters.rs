@@ -248,3 +248,94 @@ fn element_slots_are_normalized() {
         "the None placeholder must be stripped"
     );
 }
+
+/// The enum ids the parameter table stores are internal names, and the UI shows
+/// something else for three of the nine elements. Every id actually in use must
+/// resolve, or the dex would show `Leaf` where the game says `Grass`.
+#[test]
+fn every_element_in_use_has_a_label() {
+    let Some(index) = real_index() else {
+        eprintln!("skipping: no game pak found");
+        return;
+    };
+
+    let mut unresolved: Vec<&str> = index
+        .species_iter()
+        .flat_map(|s| s.elements.iter())
+        .filter(|id| index.element_name(id).is_none())
+        .map(String::as_str)
+        .collect();
+    unresolved.sort_unstable();
+    unresolved.dedup();
+    assert!(unresolved.is_empty(), "elements with no UI label: {unresolved:?}");
+
+    // The three that differ from their enum name are the whole reason this
+    // lookup exists, so pin them rather than only asserting non-emptiness.
+    assert_eq!(index.element_name("Leaf"), Some("Grass"));
+    assert_eq!(index.element_name("Earth"), Some("Ground"));
+    assert_eq!(index.element_name("Electricity"), Some("Electric"));
+    assert_eq!(index.element_name("Normal"), Some("Neutral"));
+    assert_eq!(index.element_name("Fire"), Some("Fire"));
+}
+
+/// Same contract for work suitabilities, plus the display order the Paldeck
+/// uses — which is the UI table's order, not alphabetical.
+#[test]
+fn every_work_suitability_in_use_has_a_label_and_an_order() {
+    let Some(index) = real_index() else {
+        eprintln!("skipping: no game pak found");
+        return;
+    };
+
+    let mut unresolved: Vec<&str> = index
+        .species_iter()
+        .flat_map(|s| s.work_suitabilities.keys())
+        .filter(|id| index.work_suitability_name(id).is_none())
+        .map(String::as_str)
+        .collect();
+    unresolved.sort_unstable();
+    unresolved.dedup();
+    assert!(unresolved.is_empty(), "work suitabilities with no UI label: {unresolved:?}");
+
+    assert_eq!(index.work_suitability_name("Handcraft"), Some("Handiwork"));
+    assert_eq!(index.work_suitability_name("EmitFlame"), Some("Kindling"));
+    assert_eq!(index.work_suitability_name("Deforest"), Some("Lumbering"));
+
+    // Every id in use must be placeable in the display order, otherwise it
+    // would silently sort to the end of the icon row.
+    let order = index.work_suitability_order();
+    let missing: Vec<&str> = index
+        .species_iter()
+        .flat_map(|s| s.work_suitabilities.keys())
+        .filter(|id| !order.iter().any(|o| o.eq_ignore_ascii_case(id)))
+        .map(String::as_str)
+        .collect();
+    assert!(missing.is_empty(), "work suitabilities missing from the display order: {missing:?}");
+
+    // Kindling leads the row in game and Farming closes it; alphabetical order
+    // would put Collection first, so this also proves the order is the table's.
+    let position = |id: &str| order.iter().position(|o| o == id).expect("id in order");
+    assert!(position("EmitFlame") < position("Watering"));
+    assert!(position("Watering") < position("Seeding"));
+    assert!(position("Transport") < position("MonsterFarm"));
+    assert!(position("EmitFlame") < position("Collection"));
+}
+
+/// Labels come from the localized table, so a non-English extraction must give
+/// non-English labels — otherwise the lookup is silently reading the source
+/// language for everyone.
+#[test]
+fn labels_follow_the_selected_language() {
+    let Some(mut pak) = real_pak() else {
+        eprintln!("skipping: no game pak found");
+        return;
+    };
+    let Ok(index) = ReferenceIndex::extract(&mut pak, "ja") else {
+        eprintln!("skipping: no Japanese text tables");
+        return;
+    };
+
+    let leaf = index.element_name("Leaf").expect("Leaf should resolve in Japanese");
+    assert_ne!(leaf, "Grass", "Japanese extraction returned the English label");
+    assert!(!leaf.is_empty());
+}

@@ -56,9 +56,16 @@
 //! no game assets are redistributed and the plan's pre-agreed fallback of
 //! vendoring a third-party dataset ended up not being needed at all.
 //!
-//! ### Still missing
+//! Breeding results come from the same mechanism — `DT_PalCombiUnique` for the
+//! authored exceptions, and the generic `CombiRank` rule for everything else.
+//! See [`crate::breeding`], which also records the two in-game experiments that
+//! settled the rank tie-break, since that rule is not in the pak at all.
 //!
-//! Breeding combos, which live in a different table and are not yet read.
+//! The enum names in [`Species::elements`] and [`Species::work_suitabilities`]
+//! are internal (`Leaf`, `Earth`, `Handcraft`) and are not what the game shows.
+//! [`crate::ReferenceIndex::element_name`] and
+//! [`crate::ReferenceIndex::work_suitability_name`] translate them, using the
+//! pak's own UI string table so the labels stay localized.
 //!
 //! [`PassthroughReferenceData`] is retained for tests and for the case where
 //! no pak is available (the app must still run without the game installed).

@@ -73,6 +73,18 @@ const TECH_NAMES: (&str, &str) = ("DT_TechnologyNameText_Common", "NAME_RECIPE_"
 const ITEM_NAMES: (&str, &str) = ("DT_ItemNameText_Common", "ITEM_NAME_");
 const MAP_OBJECT_NAMES: (&str, &str) = ("DT_MapObjectNameText_Common", "MAPOBJECT_NAME_");
 
+/// The UI string table, which is where the *labels* for the enum ids in
+/// [`Species::elements`] and [`Species::work_suitabilities`] live.
+///
+/// Those fields hold the game's internal enum names — `Leaf`, `Earth`,
+/// `Handcraft` — which are not what the game shows the player (`Grass`,
+/// `Ground`, `Handiwork`). Rather than hard-code that translation, and lose
+/// every language but English with it, both prefixes are read straight out of
+/// this table, keyed by the same enum name.
+const UI_NAMES: &str = "DT_UI_Common_Text_Common";
+const ELEMENT_NAME_PREFIX: &str = "COMMON_ELEMENT_NAME_";
+const WORK_SUITABILITY_NAME_PREFIX: &str = "COMMON_WORK_SUITABILITY_";
+
 /// Pal icon textures. The sibling `NPC/` and `SKin/` folders hold human-NPC
 /// portraits and cosmetic skins, neither of which is a species icon.
 const ICON_DIR: &str = "Pal/Content/Pal/Texture/PalIcon/Normal/";
@@ -111,6 +123,16 @@ pub struct ReferenceIndex {
     technologies: HashMap<String, String>,
     items: HashMap<String, String>,
     map_objects: HashMap<String, String>,
+    /// Element enum name -> localized label, e.g. `Leaf` -> `Grass`.
+    element_names: HashMap<String, String>,
+    /// Work suitability enum name -> localized label, e.g. `Handcraft` ->
+    /// `Handiwork`.
+    work_names: HashMap<String, String>,
+    /// Work suitability enum names in the order the UI table lists them, which
+    /// is the order the in-game Paldeck shows the icons in. `Species` stores
+    /// suitabilities in a `BTreeMap`, so without this they would render
+    /// alphabetically — correct, but not what the player is used to reading.
+    work_order: Vec<String>,
     human_npc_ids: HashSet<String>,
     /// Species key -> pak entry base path (no extension) for its icon.
     icon_paths: HashMap<String, String>,
@@ -255,7 +277,41 @@ impl ReferenceIndex {
             }
         }
 
+        index.read_ui_labels(pak, &text_root);
+
         Ok(index)
+    }
+
+    /// Load the element and work-suitability labels from the UI string table.
+    ///
+    /// A warning rather than an error if the table moves, for the same reason
+    /// [`Self::apply_parameters`] is: these are labels on data that is already
+    /// correct, so losing them should cost the user pretty names, not the
+    /// entire reference index.
+    fn read_ui_labels(&mut self, pak: &mut Pak, text_root: &str) {
+        let entries = match read_text_table(pak, text_root, UI_NAMES) {
+            Ok(entries) => entries,
+            Err(e) => {
+                self.warnings.push(format!("reading {UI_NAMES}: {e}"));
+                return;
+            }
+        };
+
+        for entry in entries {
+            // Some keys under the work prefix are sub-categories with no text
+            // of their own (`Mining_Stone`), so an absent display is a skip
+            // rather than a fallback to the raw id.
+            let Some(text) = entry.display() else { continue };
+            if let Some(id) = entry.key.strip_prefix(ELEMENT_NAME_PREFIX) {
+                self.element_names.insert(id.to_ascii_lowercase(), text);
+            } else if let Some(id) = entry.key.strip_prefix(WORK_SUITABILITY_NAME_PREFIX) {
+                if id.is_empty() {
+                    continue;
+                }
+                self.work_order.push(id.to_owned());
+                self.work_names.insert(id.to_ascii_lowercase(), text);
+            }
+        }
     }
 
     /// The property schema for Palworld's cooked packages.
@@ -443,6 +499,29 @@ impl ReferenceIndex {
     #[must_use]
     pub fn map_object_count(&self) -> usize {
         self.map_objects.len()
+    }
+
+    /// Resolve an element enum name from [`Species::elements`] to the label
+    /// the game shows, e.g. `Leaf` -> `Grass`.
+    #[must_use]
+    pub fn element_name(&self, id: &str) -> Option<&str> {
+        self.element_names.get(&id.to_ascii_lowercase()).map(String::as_str)
+    }
+
+    /// Resolve a work suitability enum name from
+    /// [`Species::work_suitabilities`] to the label the game shows, e.g.
+    /// `Handcraft` -> `Handiwork`.
+    #[must_use]
+    pub fn work_suitability_name(&self, id: &str) -> Option<&str> {
+        self.work_names.get(&id.to_ascii_lowercase()).map(String::as_str)
+    }
+
+    /// Work suitability enum names in the game's own display order. Callers
+    /// ordering a species' suitabilities should follow this rather than the
+    /// `BTreeMap`'s alphabetical order.
+    #[must_use]
+    pub fn work_suitability_order(&self) -> &[String] {
+        &self.work_order
     }
 
     #[must_use]
