@@ -8,6 +8,7 @@ import type {
   SnapshotSummaryView,
 } from "./types";
 import { useSpeciesIcons } from "./icons";
+import { elementColor } from "./elements";
 
 /// Fixed row height, in px, matching `.roster-table tbody tr` in styles.css.
 /// Windowed rendering needs to know it without measuring.
@@ -16,8 +17,11 @@ const ROW_HEIGHT = 48;
 /// expose blank space before React catches up.
 const OVERSCAN = 10;
 
+/// Sentinel for "don't filter by element" in the element picker.
+const ANY_ELEMENT = "";
+
 type Sort = { column: SortColumn; direction: "asc" | "desc" };
-type SortColumn = "characterId" | "level" | "ivAvg" | "rank";
+type SortColumn = "characterId" | "level" | "ivAvg" | "rank" | "rarity";
 
 interface Props {
   summary: SnapshotSummaryView;
@@ -32,6 +36,7 @@ export default function Roster({ summary }: Props) {
   const [viewportHeight, setViewportHeight] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [element, setElement] = useState(ANY_ELEMENT);
   const [sort, setSort] = useState<Sort>({ column: "level", direction: "desc" });
 
   const load = useCallback(async () => {
@@ -73,18 +78,30 @@ export default function Roster({ summary }: Props) {
     };
   }, [pals]);
 
+  // Elements come from the data rather than a fixed list, so a species with a
+  // new element in a future patch stays filterable.
+  const elementOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const pal of pals ?? []) {
+      for (const el of pal.elements) if (!seen.has(el.id)) seen.set(el.id, el.name);
+    }
+    return [...seen].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [pals]);
+
   const filtered = useMemo(() => {
     if (!pals) return [];
     const needle = filter.trim().toLowerCase();
-    const matches = needle
-      ? pals.filter(
-          (p) =>
-            speciesLabel(p).toLowerCase().includes(needle) ||
-            p.characterId.toLowerCase().includes(needle) ||
-            passiveLabels(p).some((n) => n.toLowerCase().includes(needle)) ||
-            (p.nickname?.toLowerCase().includes(needle) ?? false),
-        )
-      : pals;
+    const matches = pals.filter((p) => {
+      if (element !== ANY_ELEMENT && !p.elements.some((el) => el.id === element)) return false;
+      if (!needle) return true;
+      return (
+        speciesLabel(p).toLowerCase().includes(needle) ||
+        p.characterId.toLowerCase().includes(needle) ||
+        p.elements.some((el) => el.name.toLowerCase().includes(needle)) ||
+        passiveLabels(p).some((n) => n.toLowerCase().includes(needle)) ||
+        (p.nickname?.toLowerCase().includes(needle) ?? false)
+      );
+    });
     const sorted = [...matches].sort((a, b) => {
       const dir = sort.direction === "asc" ? 1 : -1;
       switch (sort.column) {
@@ -94,12 +111,14 @@ export default function Roster({ summary }: Props) {
           return dir * (a.level - b.level);
         case "rank":
           return dir * (a.rank - b.rank);
+        case "rarity":
+          return dir * (a.rarity - b.rarity);
         case "ivAvg":
           return dir * (ivAverage(a) - ivAverage(b));
       }
     });
     return sorted;
-  }, [pals, filter, sort]);
+  }, [pals, filter, element, sort]);
 
   // Only the rows on screen are rendered. A full roster is ~2000 rows, each
   // now carrying an icon; rendering all of them is what blanked the window.
@@ -190,13 +209,30 @@ export default function Roster({ summary }: Props) {
         </details>
       )}
 
-      <input
-        className="filter"
-        type="text"
-        placeholder="Filter by species or nickname…"
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-      />
+      <div className="roster-controls">
+        <input
+          className="filter"
+          type="text"
+          placeholder="Filter by species, element, passive or nickname…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+        {elementOptions.length > 0 && (
+          <select
+            className="picker"
+            value={element}
+            onChange={(e) => setElement(e.target.value)}
+            aria-label="Filter by element"
+          >
+            <option value={ANY_ELEMENT}>Any element</option>
+            {elementOptions.map((el) => (
+              <option key={el.id} value={el.id}>
+                {el.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
 
       {pals === null && !error && <p className="muted">Loading roster…</p>}
 
@@ -209,12 +245,16 @@ export default function Roster({ summary }: Props) {
                 <SortableHeader column="characterId" sort={sort} onToggle={toggleSort}>
                   Species
                 </SortableHeader>
+                <th>Element</th>
                 <th>Nickname</th>
                 <SortableHeader column="level" sort={sort} onToggle={toggleSort}>
                   Lv
                 </SortableHeader>
                 <SortableHeader column="rank" sort={sort} onToggle={toggleSort}>
                   Rank
+                </SortableHeader>
+                <SortableHeader column="rarity" sort={sort} onToggle={toggleSort}>
+                  Rarity
                 </SortableHeader>
                 <th>Gender</th>
                 <SortableHeader column="ivAvg" sort={sort} onToggle={toggleSort}>
@@ -244,9 +284,21 @@ export default function Roster({ summary }: Props) {
                   <td className="species" title={pal.characterId}>
                     {speciesLabel(pal)}
                   </td>
+                  <td className="element-col">
+                    {pal.elements.map((el) => (
+                      <span
+                        key={el.id}
+                        className="element"
+                        style={{ color: elementColor(el.id), borderColor: elementColor(el.id) }}
+                      >
+                        {el.name}
+                      </span>
+                    ))}
+                  </td>
                   <td className="muted">{pal.nickname ?? ""}</td>
                   <td>{pal.level}</td>
                   <td>{pal.rank}</td>
+                  <td className="muted">{pal.rarity > 0 ? pal.rarity : ""}</td>
                   <td className="muted">{pal.gender}</td>
                   <td className="ivs">
                     {pal.ivHp}/{pal.ivShot}/{pal.ivDefense}

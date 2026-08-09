@@ -4,6 +4,41 @@
 use paldex_store::Store;
 use serde::Serialize;
 
+/// One of a species' elements, carrying both the internal enum name and the
+/// label the game shows. The id travels alongside the name because the UI
+/// colours a chip by element and must not key that off localized text.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElementView {
+    pub id: String,
+    pub name: String,
+}
+
+/// A job a species can do, and how well. Ordered by the game's own display
+/// order, not alphabetically — see `ReferenceIndex::work_suitability_order`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkSuitabilityView {
+    pub id: String,
+    pub name: String,
+    pub level: u32,
+}
+
+/// A species' authored base stats. These are the per-species inputs the game
+/// combines with level, IVs and souls — not a finished stat line, so the UI
+/// presents them as relative rather than as numbers a player would see in a
+/// Pal's status screen.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseStatsView {
+    pub hp: u32,
+    pub melee_attack: u32,
+    pub shot_attack: u32,
+    pub defense: u32,
+    pub support: u32,
+    pub craft_speed: u32,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PalView {
@@ -13,6 +48,12 @@ pub struct PalView {
     /// `AmaterasuWolf`. `None` when the pak isn't available, in which case the
     /// UI falls back to `character_id`.
     pub display_name: Option<String>,
+    /// This pal's species' elements. Empty when no pak is available, and also
+    /// for the handful of species the shipped data leaves elementless.
+    pub elements: Vec<ElementView>,
+    /// Species rarity tier, which drives the in-game rarity stars. 0 without a
+    /// pak.
+    pub rarity: u32,
     pub owner: Option<String>,
     pub level: i64,
     pub rank: i64,
@@ -75,6 +116,13 @@ pub struct DexEntryView {
     pub capture_count: i64,
     /// Whether any player has claimed this species' 10-capture bonus.
     pub bonus_claimed: bool,
+    /// Elements, rarity, base stats and work suitabilities as
+    /// `DT_PalMonsterParameter` authored them. All empty or `None` without a
+    /// pak, which is the same fallback the rest of this view already uses.
+    pub elements: Vec<ElementView>,
+    pub rarity: u32,
+    pub stats: Option<BaseStatsView>,
+    pub work_suitabilities: Vec<WorkSuitabilityView>,
 }
 
 /// Dex facts as the store has them, keyed by the save's own species ids —
@@ -156,6 +204,8 @@ pub fn pal_roster(store: &Store, snapshot_id: i64) -> Result<Vec<PalView>, Strin
                 // Filled in by the command layer, which owns the pak-derived
                 // reference data; this layer stays pure SQL.
                 display_name: None,
+                elements: Vec::new(),
+                rarity: 0,
                 owner: row.get(2)?,
                 level: row.get(3)?,
                 rank: row.get(4)?,

@@ -360,19 +360,64 @@ pub fn pal_roster(app: AppHandle, state: State<AppState>) -> Result<Vec<PalView>
     Ok(roster)
 }
 
-/// Drop human NPCs and attach localized species and passive names.
+/// Drop human NPCs and attach localized species and passive names, plus the
+/// species-level facts the roster shows per pal.
 fn enrich_roster(roster: &mut Vec<PalView>, reference: &ReferenceIndex) {
     roster.retain(|pal| !reference.is_human_npc(&pal.character_id));
     for pal in roster.iter_mut() {
-        pal.display_name = reference
-            .species(&pal.character_id)
-            .map(|s| s.display_name.clone());
+        if let Some(species) = reference.species(&pal.character_id) {
+            pal.display_name = Some(species.display_name.clone());
+            pal.elements = element_views(&species.elements, reference);
+            pal.rarity = species.rarity;
+        }
         pal.passive_names = pal
             .passives
             .iter()
             .map(|id| resolve_or_id(reference.passive(id).map(|p| p.display_name.as_str()), id))
             .collect();
     }
+}
+
+/// Pair each element enum name with its localized label, keeping the id so the
+/// UI can colour by element without depending on the display language.
+fn element_views(elements: &[String], reference: &ReferenceIndex) -> Vec<queries::ElementView> {
+    elements
+        .iter()
+        .map(|id| queries::ElementView {
+            name: resolve_or_id(reference.element_name(id), id).to_owned(),
+            id: id.clone(),
+        })
+        .collect()
+}
+
+/// A species' work suitabilities in the game's own display order.
+///
+/// `Species::work_suitabilities` is a `BTreeMap`, so iterating it directly
+/// would put Collection before EmitFlame — alphabetical, and not the icon row
+/// the player recognises from the Paldeck. Anything the order table doesn't
+/// mention still appears, after the ordered entries, rather than being dropped.
+fn work_views(
+    species: &paldex_data::Species,
+    reference: &ReferenceIndex,
+) -> Vec<queries::WorkSuitabilityView> {
+    let rank = |id: &str| {
+        reference
+            .work_suitability_order()
+            .iter()
+            .position(|o| o.eq_ignore_ascii_case(id))
+            .unwrap_or(usize::MAX)
+    };
+    let mut views: Vec<queries::WorkSuitabilityView> = species
+        .work_suitabilities
+        .iter()
+        .map(|(id, level)| queries::WorkSuitabilityView {
+            name: resolve_or_id(reference.work_suitability_name(id), id).to_owned(),
+            id: id.clone(),
+            level: *level,
+        })
+        .collect();
+    views.sort_by_key(|w| (rank(&w.id), w.id.clone()));
+    views
 }
 
 /// Attach localized technology names.
@@ -540,6 +585,17 @@ fn dex_with_reference(facts: &queries::DexFacts, index: &ReferenceIndex) -> DexP
             character_id: species.character_id.clone(),
             display_name: species.display_name.clone(),
             dex_label: species.dex_label(),
+            elements: element_views(&species.elements, index),
+            rarity: species.rarity,
+            stats: Some(queries::BaseStatsView {
+                hp: species.stats.hp,
+                melee_attack: species.stats.melee_attack,
+                shot_attack: species.stats.shot_attack,
+                defense: species.stats.defense,
+                support: species.stats.support,
+                craft_speed: species.stats.craft_speed,
+            }),
+            work_suitabilities: work_views(species, index),
         })
         .collect();
 
@@ -577,6 +633,11 @@ fn dex_without_reference(facts: &queries::DexFacts) -> DexProgressView {
             caught: true,
             capture_count: facts.capture_counts.get(id).copied().unwrap_or(0),
             bonus_claimed: facts.bonus_claimed.contains(id),
+            // No pak means no parameter table, so none of these are knowable.
+            elements: Vec::new(),
+            rarity: 0,
+            stats: None,
+            work_suitabilities: Vec::new(),
         })
         .collect();
     entries.sort_by(|a, b| a.display_name.cmp(&b.display_name));

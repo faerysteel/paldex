@@ -43,11 +43,45 @@ export interface SnapshotSummaryView {
 
 export type LocationKind = "party" | "box" | "other" | null;
 
+/**
+ * One of a species' elements. `id` is the game's internal enum name (`Leaf`,
+ * `Earth`); `name` is the localized label it shows (`Grass`, `Ground`). Colour
+ * and any other styling must key off `id` — `name` changes with the language.
+ */
+export interface ElementView {
+  id: string;
+  name: string;
+}
+
+/** A job a species can do, already in the game's own display order. */
+export interface WorkSuitabilityView {
+  id: string;
+  name: string;
+  level: number;
+}
+
+/**
+ * Authored per-species base stats — the inputs the game combines with level,
+ * IVs and souls, not a finished stat line.
+ */
+export interface BaseStatsView {
+  hp: number;
+  meleeAttack: number;
+  shotAttack: number;
+  defense: number;
+  support: number;
+  craftSpeed: number;
+}
+
 export interface PalView {
   instanceId: string;
   characterId: string;
   /** Localized species name from the game pak; null when no pak was found. */
   displayName: string | null;
+  /** Empty without a pak, and for the few genuinely elementless species. */
+  elements: ElementView[];
+  /** Species rarity tier; 0 without a pak. */
+  rarity: number;
   owner: string | null;
   level: number;
   rank: number;
@@ -80,6 +114,11 @@ export interface DexEntryView {
   /** Best `PalCaptureCount` across players, toward the 10-capture bonus. */
   captureCount: number;
   bonusClaimed: boolean;
+  /** All four are empty/null without a pak. */
+  elements: ElementView[];
+  rarity: number;
+  stats: BaseStatsView | null;
+  workSuitabilities: WorkSuitabilityView[];
 }
 
 export interface DexProgressView {
