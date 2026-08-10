@@ -1203,6 +1203,78 @@ mod tests {
         );
     }
 
+    /// Picking a different species must actually change the answer.
+    ///
+    /// The per-pair assertions in the test above would all still pass if the
+    /// target filter were broken in a way that returned every breedable pair
+    /// for everything, so this pins the property those checks cannot see: two
+    /// different targets give different pair sets, and no target returns the
+    /// whole cross product.
+    #[test]
+    fn different_targets_give_different_pairs() {
+        let Some((views, pals, loaded)) = real_analysis_roster() else {
+            eprintln!("skipping: need both a real save and the game pak");
+            return;
+        };
+        let index = &loaded.index;
+
+        let mut species: Vec<&str> = pals.iter().map(|p| p.character_id.as_str()).collect();
+        species.sort_unstable();
+        species.dedup();
+
+        // Every distinct child the owned roster can actually produce.
+        let mut targets: Vec<String> = species
+            .iter()
+            .enumerate()
+            .flat_map(|(i, a)| {
+                species[i..]
+                    .iter()
+                    .filter_map(|b| index.breeding_result(a, b).map(str::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        targets.sort();
+        targets.dedup();
+        eprintln!("{} distinct reachable targets from {} owned species", targets.len(), species.len());
+        assert!(targets.len() > 20, "a 296-species roster should reach many children");
+
+        // The total number of species pairs that breed at all — the number a
+        // broken filter would return for every target.
+        let all_breedable = species
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                species[i..]
+                    .iter()
+                    .filter(|b| index.breeding_result(a, b).is_some())
+                    .count()
+            })
+            .sum::<usize>();
+
+        let sample: Vec<&String> = targets.iter().step_by(targets.len() / 8).take(8).collect();
+        let mut signatures = Vec::new();
+        for target in &sample {
+            let pairs = breeding_view(&views, &pals, target, index);
+            let signature: Vec<(String, String)> = pairs
+                .iter()
+                .map(|p| (p.parent_a.instance_id.clone(), p.parent_b.instance_id.clone()))
+                .collect();
+            eprintln!("{target}: {} pairs", signature.len());
+            assert!(
+                signature.len() < all_breedable,
+                "{target} returned {} of {all_breedable} breedable pairs — the target filter is not filtering",
+                signature.len()
+            );
+            signatures.push((target.to_string(), signature));
+        }
+
+        for (i, (a, sig_a)) in signatures.iter().enumerate() {
+            for (b, sig_b) in &signatures[i + 1..] {
+                assert_ne!(sig_a, sig_b, "{a} and {b} returned an identical pair list");
+            }
+        }
+    }
+
     /// Dev-only: dump real command output as JSON so the frontend can be
     /// driven with genuine data outside the Tauri shell. Runs only when
     /// `PALDEX_FIXTURE_OUT` names a directory; otherwise it is a no-op.
@@ -1259,10 +1331,13 @@ mod tests {
         write("pal_icons", serde_json::Value::Object(icons));
 
         // The analysis tab. `breeding_options` takes a target, so it gets one
-        // fixture per captured target plus a fallback the harness serves for
-        // anything else — see `preview/mock-core.ts`. Targets are whatever the
-        // real roster can actually breed, so the preview shows populated lists
-        // rather than an empty state.
+        // fixture per target — *every* species the owned roster can actually
+        // breed, not a sample. An earlier version captured eight and let the
+        // harness fall back to one of them for everything else, which showed
+        // one species' pairs under another species' name: the preview has to
+        // answer per target or it is worse than no preview. A target with no
+        // file is one nothing owned can produce, and the harness reads that
+        // absence as the empty list the real command returns.
         let pal_count = roster.len();
         let pals: Vec<paldex_model::Pal> = roster.iter().filter_map(to_model_pal).collect();
         let views: Vec<PalView> =
@@ -1275,24 +1350,22 @@ mod tests {
         let mut targets: Vec<String> = owned_species
             .iter()
             .enumerate()
-            .filter_map(|(i, a)| {
-                owned_species[i + 1..]
+            .flat_map(|(i, a)| {
+                owned_species[i..]
                     .iter()
-                    .find_map(|b| loaded.index.breeding_result(a, b).map(str::to_owned))
+                    .filter_map(|b| loaded.index.breeding_result(a, b).map(str::to_owned))
+                    .collect::<Vec<_>>()
             })
-            .take(64)
             .collect();
         targets.sort();
         targets.dedup();
-        for target in targets.iter().take(8) {
+        let mut pair_total = 0usize;
+        for target in &targets {
             let pairs = breeding_view(&views, &pals, target, &loaded.index);
+            pair_total += pairs.len();
             write(&format!("breeding_options__{target}"), serde_json::to_value(&pairs).unwrap());
         }
-        if let Some(first) = targets.first() {
-            let pairs = breeding_view(&views, &pals, first, &loaded.index);
-            write("breeding_options", serde_json::to_value(&pairs).unwrap());
-            eprintln!("fixture: breeding targets {:?}", &targets[..targets.len().min(8)]);
-        }
+        eprintln!("fixture: {} breeding targets, {pair_total} pairs total", targets.len());
         if let Some((dex, players, summary)) = &derived {
             write("dex_progress", serde_json::to_value(dex).unwrap());
             write("player_progress", serde_json::to_value(players).unwrap());

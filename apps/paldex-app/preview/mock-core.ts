@@ -2,20 +2,22 @@
 // fixture data captured from the real commands. Preview harness only.
 //
 // Most commands take no arguments and map straight onto `<cmd>.json`.
-// `breeding_options` takes a target species, and the dump captures a handful
-// of them as `breeding_options__<target>.json`; anything else falls back to
-// the plain capture, so picking an uncaptured target in the preview shows a
-// real-shaped list rather than an error. Only the harness behaves this way —
-// the real command answers for whatever target it is given.
+// `breeding_options` takes a target species and is captured per target, as
+// `breeding_options__<target>.json`. A target with no file is one the owned
+// roster cannot breed, so its absence resolves to the empty list the real
+// command returns — deliberately *not* a fallback to some other target's
+// capture, which would show one species' pairs under another species' name.
 export async function invoke<T>(cmd: string, args?: unknown): Promise<T> {
   const target = (args as { target?: unknown } | undefined)?.target;
-  const names = typeof target === "string" ? [`${cmd}__${target}`, cmd] : [cmd];
 
-  for (const name of names) {
-    const fixture = await load<T>(name);
-    if (fixture !== null) return fixture;
+  if (typeof target === "string") {
+    const pairs = await load<T>(`${cmd}__${target}`);
+    return pairs ?? ([] as unknown as T);
   }
-  throw new Error(`no fixture for ${cmd}`);
+
+  const fixture = await load<T>(cmd);
+  if (fixture === null) throw new Error(`no fixture for ${cmd}`);
+  return fixture;
 }
 
 /**
@@ -24,8 +26,7 @@ export async function invoke<T>(cmd: string, args?: unknown): Promise<T> {
  * The content-type check is load-bearing: Vite serves the SPA's `index.html`
  * with a **200** for any path it doesn't recognise, so a missing fixture comes
  * back as HTML rather than a 404. Testing `res.ok` alone would hand `res.json()`
- * a document and fail with "Unexpected token '<'" instead of falling through to
- * the next candidate.
+ * a document and fail with "Unexpected token '<'".
  */
 async function load<T>(name: string): Promise<T | null> {
   const res = await fetch(`/__fixture__/${name}.json`);
