@@ -7,7 +7,10 @@ mod gvas_ext;
 pub mod rawdata;
 pub mod types;
 
-pub use analysis::{best_of_species, condense_candidates, grade_ivs, rank_by_passives, IvGrade, IvTier};
+pub use analysis::{
+    best_of_species, breeding_suggestions, condense_candidates, grade_ivs, rank_by_passives,
+    BreedingPair, IvGrade, IvTier,
+};
 pub use rawdata::base_camp::{decode_base_camp_map, BaseCamp};
 pub use rawdata::character::{decode_character_map, CharacterMapResult};
 pub use rawdata::guild::{decode_group_map, GroupKind, Guild};
