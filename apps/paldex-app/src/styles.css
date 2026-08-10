@@ -984,3 +984,33 @@ code {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
+
+/* Pool sub-tabs inside the breeding panel. Counts sit on the tab itself so
+   "no owned pairs, but three combinations exist" is visible without clicking. */
+.breeding-pools {
+  align-self: flex-start;
+}
+
+.seg-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.65;
+}
+
+/* An unowned parent is a species, not a Pal — dimmed and dashed so it never
+   reads as something already in the roster. */
+.pair-parent-missing .species {
+  color: var(--muted);
+}
+
+.pair-parent-missing .pal-icon {
+  opacity: 0.55;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+.pair-need {
+  font-weight: 600;
+  color: var(--warn);
+  white-space: nowrap;
+}

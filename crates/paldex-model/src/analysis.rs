@@ -236,6 +236,119 @@ where
     pairs
 }
 
+/// A pairing that needs at least one species the player does not own.
+///
+/// Unlike [`BreedingPair`] this is a *species* combination, not two specific
+/// Pals: there is no individual to name for a species nobody owns, so there
+/// are no IVs, no gender and no passives to rank on. Whichever side is owned
+/// carries its best specimen so the half you already have is still concrete.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnownedPairing<'a> {
+    pub species_a: String,
+    pub species_b: String,
+    /// The best owned specimen of `species_a`, or `None` if it is unowned.
+    pub owned_a: Option<&'a Pal>,
+    pub owned_b: Option<&'a Pal>,
+    /// The distinct species that would have to be obtained — one entry, or
+    /// two when neither parent is owned. A pairing of an unowned species with
+    /// itself needs that one species, not two.
+    pub missing_species: Vec<String>,
+}
+
+/// Pairings for `target` that need at least one species the player does not
+/// own, best first.
+///
+/// The counterpart to [`breeding_suggestions`], which only ever pairs Pals
+/// already in the roster and so cannot answer "what would I have to catch".
+/// `species` is the candidate universe — inject the Paldeck, since a parent
+/// the player cannot recognise is not a usable suggestion.
+///
+/// Ordered by how much work the pairing implies: one new species before two,
+/// then by the quality of the specimen already owned, then by name so the
+/// list is stable. Pairings where *both* species are owned are excluded —
+/// those are [`breeding_suggestions`]' job.
+#[must_use]
+pub fn unowned_pairings<'a, F>(
+    pals: &'a [Pal],
+    species: &[&str],
+    target: &str,
+    child_of: F,
+) -> Vec<UnownedPairing<'a>>
+where
+    F: Fn(&str, &str) -> Option<String>,
+{
+    // Keyed lowercase: `FName`s are case-insensitive and the shipped data is
+    // inconsistent (`Sheepball` vs `SheepBall`), so a case mismatch between
+    // the roster and the species list would report an owned species as
+    // missing — the one error this whole screen must not make.
+    let mut best_owned: HashMap<String, &Pal> = HashMap::new();
+    for pal in pals {
+        best_owned
+            .entry(pal.character_id.to_ascii_lowercase())
+            .and_modify(|current| {
+                if is_better(pal, current) {
+                    *current = pal;
+                }
+            })
+            .or_insert(pal);
+    }
+
+    let mut candidates: Vec<&str> = species.to_vec();
+    candidates.sort_unstable_by_key(|s| s.to_ascii_lowercase());
+    candidates.dedup_by_key(|s| s.to_ascii_lowercase());
+
+    let mut pairings = Vec::new();
+    for (i, a) in candidates.iter().enumerate() {
+        for b in &candidates[i..] {
+            if !child_of(a, b).is_some_and(|child| child.eq_ignore_ascii_case(target)) {
+                continue;
+            }
+            let owned_a = best_owned.get(&a.to_ascii_lowercase()).copied();
+            let owned_b = best_owned.get(&b.to_ascii_lowercase()).copied();
+            if owned_a.is_some() && owned_b.is_some() {
+                continue;
+            }
+
+            let mut missing_species = Vec::new();
+            if owned_a.is_none() {
+                missing_species.push((*a).to_owned());
+            }
+            if owned_b.is_none() && !b.eq_ignore_ascii_case(a) {
+                missing_species.push((*b).to_owned());
+            }
+
+            pairings.push(UnownedPairing {
+                species_a: (*a).to_owned(),
+                species_b: (*b).to_owned(),
+                owned_a,
+                owned_b,
+                missing_species,
+            });
+        }
+    }
+
+    pairings.sort_by(|x, y| {
+        x.missing_species
+            .len()
+            .cmp(&y.missing_species.len())
+            .then_with(|| owned_score(y).total_cmp(&owned_score(x)))
+            .then_with(|| x.species_a.cmp(&y.species_a))
+            .then_with(|| x.species_b.cmp(&y.species_b))
+    });
+    pairings
+}
+
+/// The composite IV score of whichever parent is already owned, or 0 when
+/// neither is — used only to order pairings that imply the same amount of work.
+fn owned_score(pairing: &UnownedPairing<'_>) -> f32 {
+    pairing
+        .owned_a
+        .into_iter()
+        .chain(pairing.owned_b)
+        .map(|pal| grade_ivs(&pal.ivs).composite)
+        .fold(0.0, f32::max)
+}
+
 /// The best-scoring breedable pair drawn from two species' candidates, or
 /// `None` when no two of them can actually breed together.
 fn best_pair<'a>(a_side: &[&'a Pal], b_side: &[&'a Pal], same_species: bool) -> Option<BreedingPair<'a>> {
@@ -575,6 +688,95 @@ mod tests {
     fn breeding_suggestions_are_empty_for_an_unreachable_target() {
         let pals = vec![pal("Lamball", ivs(50), 10), pal("Chikipi", ivs(50), 10)];
         assert!(breeding_suggestions(&pals, "Anubis", fake_table).is_empty());
+    }
+
+    /// The whole Paldeck as far as `fake_table` is concerned.
+    const ALL_SPECIES: [&str; 4] = ["Chikipi", "Foxparks", "Lamball", "Vixy"];
+
+    #[test]
+    fn unowned_pairings_exclude_combinations_you_can_already_breed() {
+        // Both parents owned, so this is the owned tab's business, not ours.
+        let pals = vec![pal("Lamball", ivs(50), 10), pal("Chikipi", ivs(50), 10)];
+
+        let pairings = unowned_pairings(&pals, &ALL_SPECIES, "Vixy", fake_table);
+        assert!(
+            pairings.iter().all(|p| !p.missing_species.is_empty()),
+            "every pairing here must need at least one unowned species"
+        );
+        assert!(
+            !pairings
+                .iter()
+                .any(|p| p.species_a == "Chikipi" && p.species_b == "Lamball"),
+            "the fully-owned combination belongs to breeding_suggestions"
+        );
+        // Foxparks + Lamball also gives Vixy, and Foxparks is unowned.
+        let foxparks = pairings
+            .iter()
+            .find(|p| p.species_a == "Foxparks" || p.species_b == "Foxparks")
+            .expect("Foxparks + Lamball should be offered");
+        assert_eq!(foxparks.missing_species, ["Foxparks"]);
+    }
+
+    #[test]
+    fn unowned_pairings_keep_the_best_specimen_of_the_owned_side() {
+        let weak = pal("Lamball", ivs(10), 5);
+        let strong = pal("Lamball", ivs(95), 5);
+        let pals = vec![weak.clone(), strong.clone()];
+
+        let pairings = unowned_pairings(&pals, &ALL_SPECIES, "Vixy", fake_table);
+        let pairing = pairings.first().expect("Lamball pairs into Vixy twice over");
+        let owned = pairing.owned_a.or(pairing.owned_b).expect("Lamball is owned");
+        assert_eq!(owned.instance_id, strong.instance_id);
+        assert!(
+            pairing.owned_a.is_none() || pairing.owned_b.is_none(),
+            "one side must be the unowned species"
+        );
+    }
+
+    /// Needing one new species is less work than needing two, and the list is
+    /// sorted so the actionable rows come first.
+    #[test]
+    fn unowned_pairings_rank_one_missing_species_above_two() {
+        // Nothing owned at all: every pairing needs two species except the
+        // self-pairing, which needs one.
+        let pairings = unowned_pairings(&[], &ALL_SPECIES, "Vixy", fake_table);
+        assert!(!pairings.is_empty());
+        for window in pairings.windows(2) {
+            assert!(
+                window[0].missing_species.len() <= window[1].missing_species.len(),
+                "pairings needing fewer new species must come first"
+            );
+        }
+        assert!(
+            pairings.iter().all(|p| p.owned_a.is_none() && p.owned_b.is_none()),
+            "an empty roster owns nothing"
+        );
+    }
+
+    #[test]
+    fn an_unowned_species_paired_with_itself_needs_only_that_species() {
+        let pairings = unowned_pairings(&[], &ALL_SPECIES, "Lamball", fake_table);
+        let self_pair = pairings
+            .iter()
+            .find(|p| p.species_a == "Lamball" && p.species_b == "Lamball")
+            .expect("Lamball + Lamball gives Lamball");
+        assert_eq!(
+            self_pair.missing_species,
+            ["Lamball"],
+            "you need the one species, not two of it listed twice"
+        );
+    }
+
+    /// A case mismatch between the roster and the species list must not report
+    /// an owned species as missing — the one error this screen cannot make.
+    #[test]
+    fn ownership_matching_ignores_case() {
+        let pals = vec![pal("lamball", ivs(50), 10)];
+        let pairings = unowned_pairings(&pals, &ALL_SPECIES, "Vixy", fake_table);
+        assert!(
+            pairings.iter().all(|p| !p.missing_species.iter().any(|m| m.eq_ignore_ascii_case("Lamball"))),
+            "Lamball is owned under a different spelling and must not be listed as missing"
+        );
     }
 
     #[test]

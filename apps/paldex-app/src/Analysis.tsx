@@ -7,8 +7,10 @@ import type {
   DexProgressView,
   GradedPalView,
   IvTier,
+  PairingSideView,
   PalQualityView,
   SnapshotSummaryView,
+  UnownedPairingView,
 } from "./types";
 import { useSpeciesIcons } from "./icons";
 
@@ -241,9 +243,31 @@ export default function Analysis({ summary }: Props) {
   );
 }
 
+/** Which parent pool the breeding results are drawn from. */
+type Pool = "owned" | "unowned";
+
+const POOLS: { id: Pool; label: string; hint: string }[] = [
+  {
+    id: "owned",
+    label: "Owned pairs",
+    hint: "Both parents are Pals in this world",
+  },
+  {
+    id: "unowned",
+    label: "Unowned parents",
+    hint: "Combinations needing at least one species you don't own",
+  },
+];
+
 /**
- * The inverse breeding search: pick a species, get the owned pairs that
- * produce it, best first.
+ * The inverse breeding search: pick a species, get the combinations that
+ * produce it.
+ *
+ * Two pools, because they answer different questions and cannot share a
+ * ranking. "Owned pairs" names two specific Pals and ranks them by their IVs
+ * and passives. "Unowned parents" is a *species* search — there is no
+ * individual to rank for a species nobody owns, so it ranks by how many new
+ * species the combination would cost.
  *
  * Split from the grading above because it re-queries on every target change
  * while the grading is fetched once per snapshot.
@@ -251,7 +275,9 @@ export default function Analysis({ summary }: Props) {
 function Breeding({ summary }: { summary: SnapshotSummaryView }) {
   const [targets, setTargets] = useState<{ id: string; label: string }[]>([]);
   const [target, setTarget] = useState("");
+  const [pool, setPool] = useState<Pool>("owned");
   const [pairs, setPairs] = useState<BreedingPairView[] | null>(null);
+  const [unowned, setUnowned] = useState<UnownedPairingView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [limit, setLimit] = useState(PAIR_PAGE);
@@ -274,9 +300,12 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
     })();
   }, [summary.snapshotId]);
 
+  // Both pools are fetched for a target rather than one per tab, so the counts
+  // on the tabs are honest before you click and switching costs no round trip.
   useEffect(() => {
     if (!target) {
       setPairs(null);
+      setUnowned(null);
       return;
     }
     let cancelled = false;
@@ -285,8 +314,13 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
     setLimit(PAIR_PAGE);
     void (async () => {
       try {
-        const result = await invoke<BreedingPairView[]>("breeding_options", { target });
-        if (!cancelled) setPairs(result);
+        const [owned, lacking] = await Promise.all([
+          invoke<BreedingPairView[]>("breeding_options", { target }),
+          invoke<UnownedPairingView[]>("unowned_breeding_options", { target }),
+        ]);
+        if (cancelled) return;
+        setPairs(owned);
+        setUnowned(lacking);
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {
@@ -298,19 +332,32 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
     };
   }, [target, summary.snapshotId]);
 
-  const shown = useMemo(() => pairs?.slice(0, limit) ?? [], [pairs, limit]);
+  // Paging is per pool, so switching tabs starts at the top of the new list.
+  useEffect(() => setLimit(PAIR_PAGE), [pool]);
 
-  // Distinct parent species across every pair, for the same reason as the
-  // graded table above: paging must not change what artwork is requested.
+  const counts: Record<Pool, number | null> = {
+    owned: pairs?.length ?? null,
+    unowned: unowned?.length ?? null,
+  };
+
+  const shownPairs = useMemo(() => pairs?.slice(0, limit) ?? [], [pairs, limit]);
+  const shownUnowned = useMemo(() => unowned?.slice(0, limit) ?? [], [unowned, limit]);
+
+  // Distinct species across both pools, for the same reason as the graded
+  // table above: paging must not change what artwork is requested.
   const speciesOnScreen = useMemo(
     () => [
-      ...new Set(
-        (pairs ?? []).flatMap((p) => [p.parentA.characterId, p.parentB.characterId]),
-      ),
+      ...new Set([
+        ...(pairs ?? []).flatMap((p) => [p.parentA.characterId, p.parentB.characterId]),
+        ...(unowned ?? []).flatMap((p) => [p.parentA.characterId, p.parentB.characterId]),
+      ]),
     ],
-    [pairs],
+    [pairs, unowned],
   );
   const icons = useSpeciesIcons(speciesOnScreen);
+
+  const active = pool === "owned" ? pairs : unowned;
+  const shownCount = pool === "owned" ? shownPairs.length : shownUnowned.length;
 
   return (
     <div className="breeding">
@@ -331,25 +378,43 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
         </select>
       </div>
 
-      {error && <p className="notice">{error}</p>}
-      {busy && <p className="muted">Searching owned pairs…</p>}
+      {target && (
+        <div className="seg breeding-pools">
+          {POOLS.map((option) => (
+            <button
+              key={option.id}
+              className={pool === option.id ? "seg-btn seg-on" : "seg-btn"}
+              onClick={() => setPool(option.id)}
+              title={option.hint}
+            >
+              {option.label}
+              {counts[option.id] !== null && (
+                <span className="seg-count"> {counts[option.id]}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {!busy && pairs !== null && pairs.length === 0 && (
+      {error && <p className="notice">{error}</p>}
+      {busy && <p className="muted">Searching combinations…</p>}
+
+      {!busy && active !== null && active.length === 0 && (
         <p className="muted">
-          Nothing you own breeds into that species. Every pair here comes from
-          Pals in this world, so a target with no result needs a parent you do
-          not have yet.
+          {pool === "owned"
+            ? "Nothing you own breeds into that species — try Unowned parents for what you would have to catch first."
+            : "No combination reaches that species, even counting parents you don’t own. It is not obtainable by breeding."}
         </p>
       )}
 
-      {!busy && pairs !== null && pairs.length > 0 && (
+      {!busy && pool === "owned" && pairs !== null && pairs.length > 0 && (
         <>
           <p className="muted dex-count">
             {pairs.length} owned pair{pairs.length === 1 ? "" : "s"} produce this species —
-            showing the best {shown.length}
+            showing the best {shownCount}
           </p>
           <ul className="pairs">
-            {shown.map((pair) => (
+            {shownPairs.map((pair) => (
               <li key={`${pair.parentA.instanceId}-${pair.parentB.instanceId}`} className="pair">
                 <Parent parent={pair.parentA} icon={icons[pair.parentA.characterId]} />
                 <span className="pair-plus" aria-hidden="true">
@@ -370,14 +435,7 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
               </li>
             ))}
           </ul>
-          {pairs.length > shown.length && (
-            <button
-              className="btn btn-ghost show-more"
-              onClick={() => setLimit((n) => n + PAIR_PAGE)}
-            >
-              Show {Math.min(PAIR_PAGE, pairs.length - shown.length)} more
-            </button>
-          )}
+          <ShowMore total={pairs.length} shown={shownCount} onMore={() => setLimit((n) => n + PAIR_PAGE)} />
           <p className="muted dex-detail-note">
             One pair per species combination, using the best specimens you own
             of each. Ranked by the parents’ average IVs plus the passives the
@@ -386,6 +444,92 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
           </p>
         </>
       )}
+
+      {!busy && pool === "unowned" && unowned !== null && unowned.length > 0 && (
+        <>
+          <p className="muted dex-count">
+            {unowned.length === 1
+              ? "1 combination needs"
+              : `${unowned.length} combinations need`}{" "}
+            a species you don’t own — showing {shownCount}
+          </p>
+          <ul className="pairs">
+            {shownUnowned.map((pairing) => (
+              <li
+                key={`${pairing.parentA.characterId}-${pairing.parentB.characterId}`}
+                className="pair"
+              >
+                <Side side={pairing.parentA} icon={icons[pairing.parentA.characterId]} />
+                <span className="pair-plus" aria-hidden="true">
+                  +
+                </span>
+                <Side side={pairing.parentB} icon={icons[pairing.parentB.characterId]} />
+                <div className="pair-why">
+                  <span className="pair-need">
+                    Need {pairing.missingSpecies.length === 1 ? "1 species" : "2 species"}
+                  </span>
+                  <span className="muted">{pairing.missingSpecies.join(", ")}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <ShowMore
+            total={unowned.length}
+            shown={shownCount}
+            onMore={() => setLimit((n) => n + PAIR_PAGE)}
+          />
+          <p className="muted dex-detail-note">
+            Species combinations, not specific Pals: a species nobody owns has
+            no IVs, gender or passives to rank on. Ordered by how much you’d
+            have to catch first — one new species before two — then by the
+            quality of the parent you already have. Combinations where you own
+            both parents are under Owned pairs.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ShowMore({
+  total,
+  shown,
+  onMore,
+}: {
+  total: number;
+  shown: number;
+  onMore: () => void;
+}) {
+  if (total <= shown) return null;
+  return (
+    <button className="btn btn-ghost show-more" onClick={onMore}>
+      Show {Math.min(PAIR_PAGE, total - shown)} more
+    </button>
+  );
+}
+
+/**
+ * One side of an unowned pairing. An owned side shows the best specimen the
+ * way the owned list does; an unowned one shows the species alone, marked so
+ * the two are never mistaken for each other.
+ */
+function Side({ side, icon }: { side: PairingSideView; icon?: string }) {
+  if (side.owned) return <Parent parent={side.owned} icon={icon} />;
+  return (
+    <div className="pair-parent pair-parent-missing">
+      {icon ? (
+        <img className="pal-icon" src={icon} alt="" loading="lazy" width={32} height={32} />
+      ) : (
+        <span className="pal-icon" aria-hidden="true" />
+      )}
+      <div className="pair-parent-text">
+        <span className="species" title={side.characterId}>
+          {side.displayName ?? side.characterId}
+        </span>
+        <span className="muted">
+          {side.dexLabel ? `No.${side.dexLabel} · ` : ""}not owned
+        </span>
+      </div>
     </div>
   );
 }

@@ -9,7 +9,7 @@ pub mod types;
 
 pub use analysis::{
     best_of_species, breeding_suggestions, condense_candidates, grade_ivs, rank_by_passives,
-    BreedingPair, IvGrade, IvTier,
+    unowned_pairings, BreedingPair, IvGrade, IvTier, UnownedPairing,
 };
 pub use rawdata::base_camp::{decode_base_camp_map, BaseCamp};
 pub use rawdata::character::{decode_character_map, CharacterMapResult};

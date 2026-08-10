@@ -194,6 +194,27 @@ export interface BreedingParentView {
   ivDefense: number;
 }
 
+/**
+ * One side of a pairing involving a species you don't own. `owned` is the best
+ * specimen when the species is in your roster, and null when it is the side
+ * you would have to obtain.
+ */
+export interface PairingSideView {
+  characterId: string;
+  displayName: string | null;
+  /** Paldeck number as the game shows it, e.g. "005B". */
+  dexLabel: string | null;
+  owned: BreedingParentView | null;
+}
+
+/** A pairing needing at least one species you don't own. */
+export interface UnownedPairingView {
+  parentA: PairingSideView;
+  parentB: PairingSideView;
+  /** The distinct species you'd need to obtain — one, or two when neither is owned. */
+  missingSpecies: string[];
+}
+
 /** A suggested pairing, carrying the numbers behind its ranking. */
 export interface BreedingPairView {
   parentA: BreedingParentView;

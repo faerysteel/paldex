@@ -219,6 +219,33 @@ pub struct BreedingParentView {
     pub iv_defense: i64,
 }
 
+/// One side of a pairing that involves a species the player does not own.
+///
+/// `owned` is the best specimen when this species is in the roster, and `None`
+/// when it is the side that would have to be obtained — the distinction the
+/// whole "unowned parents" list exists to draw.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingSideView {
+    pub character_id: String,
+    pub display_name: Option<String>,
+    /// Paldeck number as the game shows it, so an unowned species is still
+    /// identifiable by the number the player would look up.
+    pub dex_label: Option<String>,
+    pub owned: Option<BreedingParentView>,
+}
+
+/// A pairing needing at least one species the player does not own.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnownedPairingView {
+    pub parent_a: PairingSideView,
+    pub parent_b: PairingSideView,
+    /// The distinct species that would have to be obtained — one, or two when
+    /// neither parent is owned.
+    pub missing_species: Vec<String>,
+}
+
 /// A suggested pairing, with the numbers behind its ranking — the plan asks
 /// for recommendations whose inputs are visible, not a bare ordering.
 #[derive(Debug, Serialize)]

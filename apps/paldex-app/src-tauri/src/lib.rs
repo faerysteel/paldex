@@ -23,6 +23,7 @@ pub fn run() {
             commands::player_flags_detail,
             commands::pal_quality,
             commands::breeding_options,
+            commands::unowned_breeding_options,
             commands::reference_status,
             commands::pal_icons,
         ])

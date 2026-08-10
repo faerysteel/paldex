@@ -854,23 +854,8 @@ fn breeding_view(
         reference.breeding_result(a, b).map(str::to_owned)
     });
 
-    let by_id: HashMap<&str, &PalView> =
-        views.iter().map(|v| (v.instance_id.as_str(), v)).collect();
-    let parent = |pal: &paldex_model::Pal| {
-        let id = pal.instance_id.to_string();
-        let view = by_id.get(id.as_str());
-        queries::BreedingParentView {
-            character_id: pal.character_id.clone(),
-            display_name: view.and_then(|v| v.display_name.clone()),
-            nickname: pal.nickname.clone(),
-            level: i64::from(pal.level),
-            gender: view.map_or_else(|| "unknown".to_owned(), |v| v.gender.clone()),
-            iv_hp: i64::from(pal.ivs.hp),
-            iv_shot: i64::from(pal.ivs.shot),
-            iv_defense: i64::from(pal.ivs.defense),
-            instance_id: id,
-        }
-    };
+    let by_id = roster_by_id(views);
+    let parent = |pal: &paldex_model::Pal| parent_view(pal, &by_id);
 
     eprintln!("[paldex] breeding_options: {} pairs for {target}", pairs.len());
     pairs
@@ -885,6 +870,108 @@ fn breeding_view(
                 .map(|id| resolve_or_id(reference.passive(id).map(|p| p.display_name.as_str()), id))
                 .collect(),
             score: pair.score,
+        })
+        .collect()
+}
+
+fn roster_by_id(views: &[PalView]) -> HashMap<&str, &PalView> {
+    views.iter().map(|v| (v.instance_id.as_str(), v)).collect()
+}
+
+/// A decoded Pal as a breeding parent, taking the localized species name and
+/// the gender string from the roster row it came from.
+fn parent_view(
+    pal: &paldex_model::Pal,
+    by_id: &HashMap<&str, &PalView>,
+) -> queries::BreedingParentView {
+    let id = pal.instance_id.to_string();
+    let view = by_id.get(id.as_str());
+    queries::BreedingParentView {
+        character_id: pal.character_id.clone(),
+        display_name: view.and_then(|v| v.display_name.clone()),
+        nickname: pal.nickname.clone(),
+        level: i64::from(pal.level),
+        gender: view.map_or_else(|| "unknown".to_owned(), |v| v.gender.clone()),
+        iv_hp: i64::from(pal.ivs.hp),
+        iv_shot: i64::from(pal.ivs.shot),
+        iv_defense: i64::from(pal.ivs.defense),
+        instance_id: id,
+    }
+}
+
+/// Pairings for `target` that need at least one species the player does not
+/// own — the "unowned parents" list behind [`breeding_options`]'s sibling tab.
+///
+/// Returns an empty list without a pak, like [`breeding_options`]: the
+/// breeding table and the species list both live there.
+///
+/// # Errors
+///
+/// A display-ready message if no world is selected, or the query fails.
+#[tauri::command(async)]
+pub fn unowned_breeding_options(
+    app: AppHandle,
+    state: State<AppState>,
+    target: String,
+) -> Result<Vec<queries::UnownedPairingView>, String> {
+    let (views, pals) = analysis_roster(&app, &state)?;
+    let Some(reference) = state.reference() else {
+        eprintln!("[paldex] unowned_breeding_options: no reference data (no pak found)");
+        return Ok(Vec::new());
+    };
+    Ok(unowned_view(&views, &pals, &target, reference))
+}
+
+/// The unowned-pairing search, split from the command for the same reason as
+/// [`quality_view`].
+fn unowned_view(
+    views: &[PalView],
+    pals: &[paldex_model::Pal],
+    target: &str,
+    reference: &ReferenceIndex,
+) -> Vec<queries::UnownedPairingView> {
+    // The Paldeck, not every key in the parameter table. Quest and variant
+    // forms share a breeding tribe with their base species, so including them
+    // would offer the same pairing several times under names no player would
+    // recognise — `dex_number` is exactly the "a player would know this one"
+    // filter, and it is what the target picker already uses.
+    let candidates: Vec<&str> = reference
+        .species_iter()
+        .filter(|s| s.dex_number.is_some())
+        .map(|s| s.character_id.as_str())
+        .collect();
+
+    let pairings = paldex_model::unowned_pairings(pals, &candidates, target, |a, b| {
+        reference.breeding_result(a, b).map(str::to_owned)
+    });
+
+    let by_id = roster_by_id(views);
+    let side = |species: &str, owned: Option<&paldex_model::Pal>| {
+        let reference_species = reference.species(species);
+        queries::PairingSideView {
+            character_id: species.to_owned(),
+            display_name: reference_species.map(|s| s.display_name.clone()),
+            dex_label: reference_species.and_then(paldex_data::Species::dex_label),
+            owned: owned.map(|pal| parent_view(pal, &by_id)),
+        }
+    };
+
+    eprintln!(
+        "[paldex] unowned_breeding_options: {} pairings for {target}",
+        pairings.len()
+    );
+    pairings
+        .into_iter()
+        .map(|p| queries::UnownedPairingView {
+            parent_a: side(&p.species_a, p.owned_a),
+            parent_b: side(&p.species_b, p.owned_b),
+            missing_species: p
+                .missing_species
+                .iter()
+                .map(|id| {
+                    resolve_or_id(reference.species(id).map(|s| s.display_name.as_str()), id)
+                })
+                .collect(),
         })
         .collect()
 }
@@ -1203,6 +1290,90 @@ mod tests {
         );
     }
 
+    /// The "unowned parents" list must never suggest something the owned list
+    /// already covers, and must never call an owned species missing.
+    #[test]
+    fn unowned_view_offers_only_combinations_needing_a_species_you_lack() {
+        let Some((views, pals, loaded)) = real_analysis_roster() else {
+            eprintln!("skipping: need both a real save and the game pak");
+            return;
+        };
+        let index = &loaded.index;
+
+        let owned: std::collections::HashSet<String> =
+            pals.iter().map(|p| p.character_id.to_ascii_lowercase()).collect();
+
+        // A target the roster cannot already breed is where this list earns
+        // its keep, so prefer one; fall back to any reachable species.
+        let target = index
+            .species_iter()
+            .filter(|s| s.dex_number.is_some())
+            .map(|s| s.character_id.clone())
+            .find(|t| {
+                breeding_view(&views, &pals, t, index).is_empty()
+                    && !unowned_view(&views, &pals, t, index).is_empty()
+            });
+        let Some(target) = target else {
+            eprintln!("skipping: the roster can already breed everything reachable");
+            return;
+        };
+
+        let pairings = unowned_view(&views, &pals, &target, index);
+        eprintln!(
+            "{}: {} unowned pairings, and no owned pair at all",
+            target,
+            pairings.len()
+        );
+        assert!(!pairings.is_empty());
+
+        for p in &pairings {
+            assert!(
+                !p.missing_species.is_empty(),
+                "{} + {} needs nothing — it belongs in the owned list",
+                p.parent_a.character_id,
+                p.parent_b.character_id
+            );
+            assert!(
+                p.parent_a.owned.is_none() || p.parent_b.owned.is_none(),
+                "at least one side must be the species you lack"
+            );
+            // An owned side must actually be owned, and an unowned side must not be.
+            for side in [&p.parent_a, &p.parent_b] {
+                let is_owned = owned.contains(&side.character_id.to_ascii_lowercase());
+                assert_eq!(
+                    side.owned.is_some(),
+                    is_owned,
+                    "{} is {} but was reported as {}",
+                    side.character_id,
+                    if is_owned { "owned" } else { "unowned" },
+                    if side.owned.is_some() { "owned" } else { "unowned" }
+                );
+            }
+            // The pairing must genuinely produce what was asked for.
+            let child = index
+                .breeding_result(&p.parent_a.character_id, &p.parent_b.character_id)
+                .unwrap_or_default();
+            assert!(
+                child.eq_ignore_ascii_case(&target),
+                "{} + {} gives {child}, not {target}",
+                p.parent_a.character_id,
+                p.parent_b.character_id
+            );
+        }
+
+        for w in pairings.windows(2) {
+            assert!(
+                w[0].missing_species.len() <= w[1].missing_species.len(),
+                "pairings needing fewer new species must come first"
+            );
+        }
+
+        assert!(
+            unowned_view(&views, &pals, "NotASpecies", index).is_empty(),
+            "an unreachable target yields nothing rather than a guess"
+        );
+    }
+
     /// Picking a different species must actually change the answer.
     ///
     /// The per-pair assertions in the test above would all still pass if the
@@ -1366,6 +1537,32 @@ mod tests {
             write(&format!("breeding_options__{target}"), serde_json::to_value(&pairs).unwrap());
         }
         eprintln!("fixture: {} breeding targets, {pair_total} pairs total", targets.len());
+
+        // The unowned-parents tab. Its universe is the Paldeck rather than the
+        // roster, so it answers for targets the owned list cannot reach at all
+        // — which is the whole reason the tab exists, and means it needs its
+        // own target list rather than reusing the one above.
+        let unowned_targets: Vec<String> = loaded
+            .index
+            .species_iter()
+            .filter(|s| s.dex_number.is_some())
+            .map(|s| s.character_id.clone())
+            .collect();
+        let mut unowned_total = 0usize;
+        let mut unowned_files = 0usize;
+        for target in &unowned_targets {
+            let pairings = unowned_view(&views, &pals, target, &loaded.index);
+            if pairings.is_empty() {
+                continue;
+            }
+            unowned_total += pairings.len();
+            unowned_files += 1;
+            write(
+                &format!("unowned_breeding_options__{target}"),
+                serde_json::to_value(&pairings).unwrap(),
+            );
+        }
+        eprintln!("fixture: {unowned_files} unowned targets, {unowned_total} pairings total");
         if let Some((dex, players, summary)) = &derived {
             write("dex_progress", serde_json::to_value(dex).unwrap());
             write("player_progress", serde_json::to_value(players).unwrap());
