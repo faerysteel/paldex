@@ -6,6 +6,7 @@ import type { SnapshotSummaryView } from "./types";
 import { relativeTime } from "./time";
 import Roster from "./Roster";
 import Dex from "./Dex";
+import Analysis from "./Analysis";
 
 /**
  * Emitted by the Rust watcher after every automatic re-sync that ingested a
@@ -15,11 +16,12 @@ const SNAPSHOT_EVENT = "paldex://snapshot";
 /** How long the "updated" flash stays up after an automatic sync. */
 const FLASH_MS = 4000;
 
-type Tab = "dex" | "roster";
+type Tab = "dex" | "roster" | "analysis";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dex", label: "Paldex" },
   { id: "roster", label: "Roster" },
+  { id: "analysis", label: "Analysis" },
 ];
 
 interface Props {
@@ -116,6 +118,7 @@ export default function WorldView({ summary, onBack, onSummaryChange }: Props) {
 
       {tab === "dex" && <Dex summary={summary} />}
       {tab === "roster" && <Roster summary={summary} />}
+      {tab === "analysis" && <Analysis summary={summary} />}
     </div>
   );
 }

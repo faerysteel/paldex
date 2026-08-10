@@ -148,6 +148,63 @@ export interface BaseCampView {
   guildId: string | null;
 }
 
+/** Composite-IV tier from `analysis::IvTier`, serialized as the variant name. */
+export type IvTier = "D" | "C" | "B" | "A" | "S" | "Perfect";
+
+/** One owned Pal as the analysis screen shows it — a trimmed `PalView`. */
+export interface GradedPalView {
+  instanceId: string;
+  characterId: string;
+  /** Localized species name; null without a pak. */
+  displayName: string | null;
+  nickname: string | null;
+  level: number;
+  rank: number;
+  gender: "male" | "female" | "unknown";
+  ivHp: number;
+  ivShot: number;
+  ivDefense: number;
+  /** Mean of the three talents. */
+  composite: number;
+  tier: IvTier;
+  /** Localized passive names, falling back to raw ids. */
+  passiveNames: string[];
+}
+
+/**
+ * The quality screen's lists. The three derived lists hold instance ids into
+ * `graded` rather than repeating the rows.
+ */
+export interface PalQualityView {
+  graded: GradedPalView[];
+  bestOfSpecies: string[];
+  condenseCandidates: string[];
+  passiveRanking: string[];
+}
+
+export interface BreedingParentView {
+  instanceId: string;
+  characterId: string;
+  displayName: string | null;
+  nickname: string | null;
+  level: number;
+  gender: "male" | "female" | "unknown";
+  ivHp: number;
+  ivShot: number;
+  ivDefense: number;
+}
+
+/** A suggested pairing, carrying the numbers behind its ranking. */
+export interface BreedingPairView {
+  parentA: BreedingParentView;
+  parentB: BreedingParentView;
+  /** Mean of the two parents' composite IV scores. */
+  parentIvAverage: number;
+  /** Localized names of every distinct passive across both parents. */
+  inheritedPassives: string[];
+  score: number;
+}
+
 export interface PlayerFlagsView {
   playerUid: string;
   unlockedTech: string[];

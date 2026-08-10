@@ -159,6 +159,81 @@ pub struct BaseCampView {
     pub guild_id: Option<String>,
 }
 
+/// One Pal as the analysis screen shows it: enough to identify and judge it,
+/// and nothing else.
+///
+/// Deliberately not a [`PalView`]. The analysis screen lists the same Pals
+/// several times over (graded, best-of-species, condense fodder), and shipping
+/// the full roster shape for each would be several copies of a payload the
+/// roster tab already fetches.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GradedPalView {
+    pub instance_id: String,
+    pub character_id: String,
+    /// Localized species name, or `None` without a pak — same fallback as
+    /// [`PalView::display_name`].
+    pub display_name: Option<String>,
+    pub nickname: Option<String>,
+    pub level: i64,
+    pub rank: i64,
+    pub gender: String,
+    pub iv_hp: i64,
+    pub iv_shot: i64,
+    pub iv_defense: i64,
+    /// Mean of the three talents, as `analysis::grade_ivs` computes it.
+    pub composite: f32,
+    /// The tier that composite falls in — `D`..`S`, or `Perfect`.
+    pub tier: String,
+    /// Localized passive names, falling back to raw ids.
+    pub passive_names: Vec<String>,
+}
+
+/// The quality screen's four lists. The three derived lists carry instance ids
+/// into `graded` rather than repeating the rows.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PalQualityView {
+    /// Every owned Pal, graded, best composite first.
+    pub graded: Vec<GradedPalView>,
+    /// The best specimen of each species the player owns.
+    pub best_of_species: Vec<String>,
+    /// Duplicates worth condensing — never the best-of-species specimen.
+    pub condense_candidates: Vec<String>,
+    /// Owned Pals ranked by passive count, best first.
+    pub passive_ranking: Vec<String>,
+}
+
+/// One parent in a suggested pairing.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreedingParentView {
+    pub instance_id: String,
+    pub character_id: String,
+    pub display_name: Option<String>,
+    pub nickname: Option<String>,
+    pub level: i64,
+    pub gender: String,
+    pub iv_hp: i64,
+    pub iv_shot: i64,
+    pub iv_defense: i64,
+}
+
+/// A suggested pairing, with the numbers behind its ranking — the plan asks
+/// for recommendations whose inputs are visible, not a bare ordering.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreedingPairView {
+    pub parent_a: BreedingParentView,
+    pub parent_b: BreedingParentView,
+    /// Mean of the two parents' composite IV scores.
+    pub parent_iv_average: f32,
+    /// Localized names of every distinct passive across both parents — the
+    /// pool the child draws from.
+    pub inherited_passives: Vec<String>,
+    pub score: f32,
+}
+
 /// `Clone` because it doubles as the [`crate::commands::SNAPSHOT_EVENT`]
 /// payload, and Tauri's `emit` requires an owned, cloneable value.
 #[derive(Debug, Clone, Serialize)]

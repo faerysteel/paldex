@@ -672,6 +672,223 @@ pub fn base_summary(app: AppHandle, state: State<AppState>) -> Result<Vec<BaseCa
     with_store(&app, &state, |store| queries::base_summary(store, snapshot_id))
 }
 
+/// The enriched roster, paired with the domain [`Pal`]s the analysis functions
+/// take.
+///
+/// Both come from one store read: the views carry the localized names the
+/// screen renders, and the `Pal`s carry the shape `paldex-model` grades. They
+/// are parallel by construction — a Pal whose id doesn't round-trip through
+/// `Uuid` is dropped from both, which cannot happen for a row this app wrote.
+fn analysis_roster(
+    app: &AppHandle,
+    state: &State<AppState>,
+) -> Result<(Vec<PalView>, Vec<paldex_model::Pal>), String> {
+    let snapshot_id = selected_snapshot_id(state)?;
+    let mut views = with_store(app, state, |store| queries::pal_roster(store, snapshot_id))?;
+    if let Some(reference) = state.reference() {
+        enrich_roster(&mut views, reference);
+    }
+
+    let pals: Vec<paldex_model::Pal> = views.iter().filter_map(to_model_pal).collect();
+    views.retain(|v| uuid::Uuid::parse_str(&v.instance_id).is_ok());
+    Ok((views, pals))
+}
+
+/// Project a stored row back onto the domain type.
+///
+/// The store flattens a [`paldex_model::Pal`] across several tables, and this
+/// rebuilds only what the analysis layer reads — IVs, level, rank, passives,
+/// gender, species. `location` is left `None` because the flat row keeps
+/// `location_kind` but not the container GUID it was resolved from, and no
+/// analysis function looks at it. Re-decoding the save to recover it would
+/// cost seconds per request to populate a field nothing reads.
+fn to_model_pal(view: &PalView) -> Option<paldex_model::Pal> {
+    let clamp = |v: i64| u8::try_from(v).unwrap_or(u8::MAX);
+    Some(paldex_model::Pal {
+        instance_id: uuid::Uuid::parse_str(&view.instance_id).ok()?,
+        character_id: view.character_id.clone(),
+        owner: view.owner.as_deref().and_then(|o| uuid::Uuid::parse_str(o).ok()),
+        level: clamp(view.level),
+        rank: clamp(view.rank),
+        souls: paldex_model::SoulUpgrades {
+            hp: clamp(view.soul_hp),
+            attack: clamp(view.soul_attack),
+            defense: clamp(view.soul_defense),
+            craft_speed: clamp(view.soul_craft_speed),
+        },
+        ivs: paldex_model::Ivs {
+            hp: clamp(view.iv_hp),
+            shot: clamp(view.iv_shot),
+            defense: clamp(view.iv_defense),
+        },
+        passives: view.passives.clone(),
+        equipped_moves: view.equipped_moves.clone(),
+        mastered_moves: view.mastered_moves.clone(),
+        gender: match view.gender.as_str() {
+            "male" => paldex_model::Gender::Male,
+            "female" => paldex_model::Gender::Female,
+            _ => paldex_model::Gender::Unknown,
+        },
+        is_lucky: view.is_lucky,
+        is_boss: view.is_boss,
+        is_predator: view.is_predator,
+        nickname: view.nickname.clone(),
+        location: None,
+    })
+}
+
+/// Owned Pals with their IV grades, plus the three derived lists the analysis
+/// screen shows — best-of-species, condense fodder, and passive ranking.
+///
+/// The derived lists are instance ids into `graded` rather than copies of the
+/// rows, so a 2,000-Pal roster is sent once rather than four times.
+///
+/// # Errors
+///
+/// A display-ready message if no world is selected, or the query fails.
+#[tauri::command(async)]
+pub fn pal_quality(app: AppHandle, state: State<AppState>) -> Result<queries::PalQualityView, String> {
+    let (views, pals) = analysis_roster(&app, &state)?;
+    Ok(quality_view(&views, &pals))
+}
+
+/// The grading itself, split from the command so it can be exercised against
+/// the real save without a running Tauri app.
+fn quality_view(views: &[PalView], pals: &[paldex_model::Pal]) -> queries::PalQualityView {
+    let mut graded: Vec<queries::GradedPalView> =
+        views.iter().zip(pals).map(|(view, pal)| graded_view(view, pal)).collect();
+    graded.sort_by(|a, b| {
+        b.composite
+            .total_cmp(&a.composite)
+            .then_with(|| b.level.cmp(&a.level))
+            .then_with(|| a.instance_id.cmp(&b.instance_id))
+    });
+
+    // Both derived sets are rendered in `graded`'s order rather than their own.
+    // `best_of_species` returns a `HashMap`, so iterating it directly would
+    // reorder the list between runs on identical data.
+    let best: std::collections::HashSet<String> = paldex_model::best_of_species(pals)
+        .values()
+        .map(|p| p.instance_id.to_string())
+        .collect();
+    let fodder: std::collections::HashSet<String> = paldex_model::condense_candidates(pals)
+        .iter()
+        .map(|p| p.instance_id.to_string())
+        .collect();
+
+    let passive_ranking = paldex_model::rank_by_passives(pals)
+        .iter()
+        .map(|p| p.instance_id.to_string())
+        .collect();
+
+    queries::PalQualityView {
+        best_of_species: graded.iter().filter(|g| best.contains(&g.instance_id)).map(|g| g.instance_id.clone()).collect(),
+        condense_candidates: graded.iter().filter(|g| fodder.contains(&g.instance_id)).map(|g| g.instance_id.clone()).collect(),
+        passive_ranking,
+        graded,
+    }
+}
+
+fn graded_view(view: &PalView, pal: &paldex_model::Pal) -> queries::GradedPalView {
+    let grade = paldex_model::grade_ivs(&pal.ivs);
+    queries::GradedPalView {
+        instance_id: view.instance_id.clone(),
+        character_id: view.character_id.clone(),
+        display_name: view.display_name.clone(),
+        nickname: view.nickname.clone(),
+        level: view.level,
+        rank: view.rank,
+        gender: view.gender.clone(),
+        iv_hp: view.iv_hp,
+        iv_shot: view.iv_shot,
+        iv_defense: view.iv_defense,
+        composite: grade.composite,
+        tier: format!("{:?}", grade.tier),
+        passive_names: passive_labels(view),
+    }
+}
+
+/// Localized passive names, falling back to the raw ids when no pak supplied
+/// them — the same rule the roster table applies.
+fn passive_labels(view: &PalView) -> Vec<String> {
+    if view.passive_names.len() == view.passives.len() {
+        view.passive_names.clone()
+    } else {
+        view.passives.clone()
+    }
+}
+
+/// Owned pairs that breed into `target`, best first.
+///
+/// Returns an empty list rather than an error when no pak is installed: the
+/// breeding table lives in the pak, so without it there is nothing to suggest
+/// — the same degradation the rest of the app applies to missing reference
+/// data.
+///
+/// # Errors
+///
+/// A display-ready message if no world is selected, or the query fails.
+#[tauri::command(async)]
+pub fn breeding_options(
+    app: AppHandle,
+    state: State<AppState>,
+    target: String,
+) -> Result<Vec<queries::BreedingPairView>, String> {
+    let (views, pals) = analysis_roster(&app, &state)?;
+    let Some(reference) = state.reference() else {
+        eprintln!("[paldex] breeding_options: no reference data (no pak found)");
+        return Ok(Vec::new());
+    };
+    Ok(breeding_view(&views, &pals, &target, reference))
+}
+
+/// The pair search itself, split from the command for the same reason as
+/// [`quality_view`].
+fn breeding_view(
+    views: &[PalView],
+    pals: &[paldex_model::Pal],
+    target: &str,
+    reference: &ReferenceIndex,
+) -> Vec<queries::BreedingPairView> {
+    let pairs = paldex_model::breeding_suggestions(pals, target, |a, b| {
+        reference.breeding_result(a, b).map(str::to_owned)
+    });
+
+    let by_id: HashMap<&str, &PalView> =
+        views.iter().map(|v| (v.instance_id.as_str(), v)).collect();
+    let parent = |pal: &paldex_model::Pal| {
+        let id = pal.instance_id.to_string();
+        let view = by_id.get(id.as_str());
+        queries::BreedingParentView {
+            character_id: pal.character_id.clone(),
+            display_name: view.and_then(|v| v.display_name.clone()),
+            nickname: pal.nickname.clone(),
+            level: i64::from(pal.level),
+            gender: view.map_or_else(|| "unknown".to_owned(), |v| v.gender.clone()),
+            iv_hp: i64::from(pal.ivs.hp),
+            iv_shot: i64::from(pal.ivs.shot),
+            iv_defense: i64::from(pal.ivs.defense),
+            instance_id: id,
+        }
+    };
+
+    eprintln!("[paldex] breeding_options: {} pairs for {target}", pairs.len());
+    pairs
+        .into_iter()
+        .map(|pair| queries::BreedingPairView {
+            parent_a: parent(pair.parent_a),
+            parent_b: parent(pair.parent_b),
+            parent_iv_average: pair.parent_iv_average,
+            inherited_passives: pair
+                .inherited_passives
+                .iter()
+                .map(|id| resolve_or_id(reference.passive(id).map(|p| p.display_name.as_str()), id))
+                .collect(),
+            score: pair.score,
+        })
+        .collect()
+}
+
 /// Per-player tech/boss/quest/collectible detail for the currently selected
 /// world's latest snapshot — the rest of `PlayerProgress` beyond
 /// `player_progress`'s scalar counters.
@@ -849,6 +1066,143 @@ mod tests {
         );
     }
 
+    /// The real roster in both shapes `analysis_roster` produces, without a
+    /// running Tauri app to hand it a store.
+    fn real_analysis_roster() -> Option<(Vec<PalView>, Vec<paldex_model::Pal>, LoadedReference)> {
+        let (Some((mut views, _)), Some(loaded)) = (real_snapshot(), load_reference()) else {
+            return None;
+        };
+        enrich_roster(&mut views, &loaded.index);
+        let pals: Vec<paldex_model::Pal> = views.iter().filter_map(to_model_pal).collect();
+        views.retain(|v| uuid::Uuid::parse_str(&v.instance_id).is_ok());
+        assert_eq!(views.len(), pals.len(), "the two shapes must stay parallel");
+        Some((views, pals, loaded))
+    }
+
+    #[test]
+    fn quality_view_grades_the_real_roster() {
+        let Some((views, pals, _)) = real_analysis_roster() else {
+            eprintln!("skipping: need both a real save and the game pak");
+            return;
+        };
+
+        let view = quality_view(&views, &pals);
+        eprintln!(
+            "quality: {} graded, {} best-of-species, {} condense candidates",
+            view.graded.len(),
+            view.best_of_species.len(),
+            view.condense_candidates.len()
+        );
+
+        assert_eq!(view.graded.len(), pals.len(), "every owned Pal is graded");
+        assert!(!view.graded.is_empty(), "the real world has Pals");
+
+        // The headline ordering. A screen that claims "best first" and isn't
+        // is worse than an unsorted one.
+        for pair in view.graded.windows(2) {
+            assert!(
+                pair[0].composite >= pair[1].composite,
+                "graded must be sorted best-first: {} then {}",
+                pair[0].composite,
+                pair[1].composite
+            );
+        }
+
+        let ids: std::collections::HashSet<&str> =
+            view.graded.iter().map(|g| g.instance_id.as_str()).collect();
+        for list in [&view.best_of_species, &view.condense_candidates, &view.passive_ranking] {
+            for id in list {
+                assert!(ids.contains(id.as_str()), "{id} is not in the graded roster");
+            }
+        }
+
+        // The plan's criterion, restated against real data: condensing must
+        // never eat the specimen worth keeping.
+        let best: std::collections::HashSet<&String> = view.best_of_species.iter().collect();
+        assert!(
+            !view.condense_candidates.iter().any(|id| best.contains(id)),
+            "a best-of-species Pal must never be condense fodder"
+        );
+        assert_eq!(view.passive_ranking.len(), view.graded.len());
+
+        // Tiers must be the enum's own names -- the UI keys styling off them.
+        for g in &view.graded {
+            assert!(
+                ["D", "C", "B", "A", "S", "Perfect"].contains(&g.tier.as_str()),
+                "unexpected tier {}",
+                g.tier
+            );
+        }
+    }
+
+    /// The target is derived from the roster rather than hardcoded: whatever
+    /// two owned species actually produce must come back as a suggestion for
+    /// that child. Hardcoding a species would make this test a hostage to
+    /// which Pals happen to be in the save.
+    #[test]
+    fn breeding_view_finds_owned_pairs_for_a_reachable_target() {
+        let Some((views, pals, loaded)) = real_analysis_roster() else {
+            eprintln!("skipping: need both a real save and the game pak");
+            return;
+        };
+        let index = &loaded.index;
+
+        let mut species: Vec<&str> = pals.iter().map(|p| p.character_id.as_str()).collect();
+        species.sort_unstable();
+        species.dedup();
+
+        // A pair of *different* owned species that breed, so the target is
+        // reachable by something other than self-breeding.
+        let Some((a, b, target)) = species.iter().enumerate().find_map(|(i, a)| {
+            species[i + 1..]
+                .iter()
+                .find_map(|b| index.breeding_result(a, b).map(|c| (*a, *b, c.to_owned())))
+        }) else {
+            eprintln!("skipping: no two owned species breed");
+            return;
+        };
+        eprintln!("breeding: {a} + {b} = {target}");
+
+        let pairs = breeding_view(&views, &pals, &target, index);
+        eprintln!("{} owned pairs produce {target}", pairs.len());
+        assert!(!pairs.is_empty(), "{a} + {b} are both owned and give {target}");
+
+        let owned: std::collections::HashSet<&str> =
+            views.iter().map(|v| v.instance_id.as_str()).collect();
+        for pair in &pairs {
+            assert!(owned.contains(pair.parent_a.instance_id.as_str()), "parent A must be owned");
+            assert!(owned.contains(pair.parent_b.instance_id.as_str()), "parent B must be owned");
+            assert_ne!(
+                pair.parent_a.instance_id, pair.parent_b.instance_id,
+                "a Pal cannot breed with itself"
+            );
+            assert!(
+                !(pair.parent_a.gender == pair.parent_b.gender && pair.parent_a.gender != "unknown"),
+                "a farm needs one male and one female, got two {}s",
+                pair.parent_a.gender
+            );
+            // The suggested pair must genuinely produce what was asked for.
+            let child = index
+                .breeding_result(&pair.parent_a.character_id, &pair.parent_b.character_id)
+                .unwrap_or_default();
+            assert!(
+                child.eq_ignore_ascii_case(&target),
+                "{} + {} gives {child}, not {target}",
+                pair.parent_a.character_id,
+                pair.parent_b.character_id
+            );
+        }
+
+        for pair in pairs.windows(2) {
+            assert!(pair[0].score >= pair[1].score, "pairs must be ranked best-first");
+        }
+
+        assert!(
+            breeding_view(&views, &pals, "NotASpecies", index).is_empty(),
+            "an unreachable target yields nothing rather than a guess"
+        );
+    }
+
     /// Dev-only: dump real command output as JSON so the frontend can be
     /// driven with genuine data outside the Tauri shell. Runs only when
     /// `PALDEX_FIXTURE_OUT` names a directory; otherwise it is a no-op.
@@ -903,6 +1257,42 @@ mod tests {
         write("pal_roster", serde_json::to_value(&roster).unwrap());
         write("player_flags_detail", serde_json::to_value(&flags).unwrap());
         write("pal_icons", serde_json::Value::Object(icons));
+
+        // The analysis tab. `breeding_options` takes a target, so it gets one
+        // fixture per captured target plus a fallback the harness serves for
+        // anything else — see `preview/mock-core.ts`. Targets are whatever the
+        // real roster can actually breed, so the preview shows populated lists
+        // rather than an empty state.
+        let pal_count = roster.len();
+        let pals: Vec<paldex_model::Pal> = roster.iter().filter_map(to_model_pal).collect();
+        let views: Vec<PalView> =
+            roster.into_iter().filter(|v| uuid::Uuid::parse_str(&v.instance_id).is_ok()).collect();
+        write("pal_quality", serde_json::to_value(quality_view(&views, &pals)).unwrap());
+
+        let mut owned_species: Vec<&str> = pals.iter().map(|p| p.character_id.as_str()).collect();
+        owned_species.sort_unstable();
+        owned_species.dedup();
+        let mut targets: Vec<String> = owned_species
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| {
+                owned_species[i + 1..]
+                    .iter()
+                    .find_map(|b| loaded.index.breeding_result(a, b).map(str::to_owned))
+            })
+            .take(64)
+            .collect();
+        targets.sort();
+        targets.dedup();
+        for target in targets.iter().take(8) {
+            let pairs = breeding_view(&views, &pals, target, &loaded.index);
+            write(&format!("breeding_options__{target}"), serde_json::to_value(&pairs).unwrap());
+        }
+        if let Some(first) = targets.first() {
+            let pairs = breeding_view(&views, &pals, first, &loaded.index);
+            write("breeding_options", serde_json::to_value(&pairs).unwrap());
+            eprintln!("fixture: breeding targets {:?}", &targets[..targets.len().min(8)]);
+        }
         if let Some((dex, players, summary)) = &derived {
             write("dex_progress", serde_json::to_value(dex).unwrap());
             write("player_progress", serde_json::to_value(players).unwrap());
@@ -918,7 +1308,7 @@ mod tests {
                 dex.unlocked_species_count, dex.total_species_count
             );
         }
-        eprintln!("fixture: {} pals, {} icons -> {out}", roster.len(), species.len());
+        eprintln!("fixture: {pal_count} pals, {} icons -> {out}", species.len());
     }
 
     /// Icons must survive the whole app-layer path: pak -> decode -> PNG ->

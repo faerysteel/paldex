@@ -21,6 +21,8 @@ pub fn run() {
             commands::player_progress,
             commands::base_summary,
             commands::player_flags_detail,
+            commands::pal_quality,
+            commands::breeding_options,
             commands::reference_status,
             commands::pal_icons,
         ])

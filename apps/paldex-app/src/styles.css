@@ -846,3 +846,141 @@ code {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
+
+/* --- analysis ----------------------------------------------------------- */
+
+.analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.show-more {
+  align-self: center;
+}
+
+/* IV tiers. Deliberately a ramp from danger through accent to good rather
+   than six unrelated hues: the tiers are ordered, and the colour should say
+   so at a glance. */
+.tier {
+  display: inline-block;
+  min-width: 3.2rem;
+  text-align: center;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.tier-d {
+  color: var(--muted);
+}
+
+.tier-c {
+  color: var(--danger);
+}
+
+.tier-b {
+  color: var(--warn);
+}
+
+.tier-a {
+  color: var(--accent);
+}
+
+.tier-s {
+  color: var(--good);
+}
+
+.tier-perfect {
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 18%, transparent);
+}
+
+/* --- breeding ----------------------------------------------------------- */
+
+.breeding {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.breeding-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.breeding-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.pairs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.pair {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.45rem 0.7rem;
+  flex-wrap: wrap;
+}
+
+.pair-parent {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 13rem;
+}
+
+.pair-parent .pal-icon {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  flex: none;
+}
+
+.pair-parent-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  font-size: 0.82rem;
+}
+
+.pair-plus {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* Pushed to the end of the row: the reason for a suggestion sits beside it,
+   but the parents are what the player scans for. */
+.pair-why {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.pair-score {
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
