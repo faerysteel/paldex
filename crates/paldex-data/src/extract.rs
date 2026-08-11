@@ -571,7 +571,7 @@ const VARIANT_PREFIXES: &[&str] = &["boss_", "predator_"];
 /// case-insensitive and the game is inconsistent in practice — the save
 /// contains `Sheepball` where the text table has `SheepBall`, and `Boss_`
 /// alongside `BOSS_`. Comparing case-sensitively silently loses those.
-fn normalize_key(character_id: &str) -> String {
+pub(crate) fn normalize_key(character_id: &str) -> String {
     let lower = character_id.to_ascii_lowercase();
     for prefix in VARIANT_PREFIXES {
         if let Some(rest) = lower.strip_prefix(prefix) {

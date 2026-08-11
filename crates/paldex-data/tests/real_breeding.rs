@@ -84,44 +84,90 @@ fn self_breeding_is_a_fixed_point_for_every_species() {
         "expected most species to be breedable, got {checked}"
     );
 
-    // No exceptions. The four that used to break it — Panthalus, Astralym and
-    // the two Yakushima raid bosses — carry `IgnoreCombi` and are now kept out
-    // of the parent table entirely, so they answer `None` rather than a
-    // nearest-rank guess. Any failure here is a real regression.
+    // No exceptions: everything that answers as a parent breeds true. The four
+    // that used to break it — Panthalus, Astralym and the two Yakushima raid
+    // bosses — have no breeding route at all and now answer `None`, so they are
+    // skipped above rather than returning a nearest-rank guess.
+    //
+    // Note what is *not* excluded: Frostallion, Jetragon, Paladius, Necromus
+    // and Bellanoir carry the same `IgnoreCombi` flag, but each has a unique
+    // combo that breeds it true, so each is a fixed point like any other
+    // species. The flag alone says nothing about whether a Pal can breed.
     assert!(
         failures.is_empty(),
-        "self-breeding must be a fixed point for every breedable species: {failures:?}"
+        "self-breeding must be a fixed point for every species that breeds: {failures:?}"
+    );
+    assert!(
+        checked > 290,
+        "the legendaries must still be in here, not filtered out with the four \
+         unbreedable ones; only {checked} species answered as parents"
     );
 }
 
-/// The species the game bars from breeding must answer `None`, not a guess.
+/// A species with no breeding route at all is not a parent either.
 ///
-/// They carry `IgnoreCombi` and cannot enter a farm, so they are neither a
-/// parent nor a possible child. Leaving them in the parent table made
-/// `breeding_result` return whatever rank happened to be nearest — Aegidron
-/// for Panthalus, Chikipi for the raid bosses — which reads as a working
-/// pairing and is not one.
+/// `IgnoreCombi` plus *no* unique combo naming it means nothing produces the
+/// species and it cannot enter a farm. Answering as a parent would hand the
+/// caller a nearest-rank guess — Aegidron for Panthalus — that reads as a
+/// working pairing and is not one.
+///
+/// The pairing with `legendaries_carry_ignore_combi_and_still_breed` below is
+/// the point: the same flag, opposite outcomes, decided by whether a unique
+/// combo exists.
 #[test]
-fn species_barred_from_breeding_are_not_parents() {
+fn species_with_no_breeding_route_are_not_parents() {
     let index = index!();
 
-    for id in [
-        "KingWhale",                   // Panthalus
-        "WorldTreeDragon",             // Astralym
-        "RAID_YakushimaBoss001_Green", // True Eye of Cthulhu
-        "RAID_YakushimaBoss002",       // Moon Lord
+    for (id, name) in [
+        ("KingWhale", "Panthalus"),
+        ("WorldTreeDragon", "Astralym"),
+        ("RAID_YakushimaBoss001_Green", "True Eye of Cthulhu"),
+        ("RAID_YakushimaBoss002", "Moon Lord"),
     ] {
         assert_eq!(
             index.breeding_result(id, id),
             None,
-            "{id} cannot breed, so it must not answer as a parent"
+            "{name} has no breeding route, so it must not answer as a parent"
         );
         assert_eq!(
             index.breeding_result(id, "SheepBall"),
             None,
-            "{id} must not answer as a parent alongside anything else either"
+            "{name} must not answer alongside anything else either"
         );
-        assert_eq!(index.breeding_result("SheepBall", id), None, "{id}, either way round");
+        assert_eq!(
+            index.breeding_result("SheepBall", id),
+            None,
+            "{name}, either way round"
+        );
+    }
+}
+
+/// `IgnoreCombi` is not a "cannot breed" flag, and treating it as one would
+/// quietly remove most of the legendaries from the app.
+///
+/// Each of these carries it, and each is nonetheless a usable parent that
+/// breeds true through its own unique combo.
+#[test]
+fn legendaries_carry_ignore_combi_and_still_breed() {
+    let index = index!();
+
+    for (id, name) in [
+        ("IceHorse", "Frostallion"),
+        ("IceHorse_Dark", "Frostallion Noct"),
+        ("JetDragon", "Jetragon"),
+        ("SaintCentaur", "Paladius"),
+        ("BlackCentaur", "Necromus"),
+        ("NightLady", "Bellanoir"),
+    ] {
+        assert_eq!(
+            index.breeding_result(id, id).map(str::to_ascii_lowercase),
+            Some(id.to_ascii_lowercase()),
+            "{name} breeds true through its unique combo"
+        );
+        assert!(
+            index.breeding_result(id, "SheepBall").is_some(),
+            "{name} is a usable parent alongside anything else"
+        );
     }
 }
 

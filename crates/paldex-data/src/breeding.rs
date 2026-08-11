@@ -45,7 +45,7 @@
 //! candidates: the per-tribe pool has no duplicate ranks, so the two tied
 //! entries sit one step either side of the target.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A species eligible to be produced by the generic rule.
 #[derive(Debug, Clone)]
@@ -91,6 +91,10 @@ pub struct BreedingIndex {
     unique: HashMap<(String, String), String>,
     /// One entry per tribe, sorted by rank.
     pool: Vec<Candidate>,
+    /// Rows carrying `IgnoreCombi`, as (lookup key, `CharacterID`). Resolved
+    /// in [`BreedingIndex::finish`] once the unique table is complete — see
+    /// there for why the decision cannot be made as rows arrive.
+    ignored: Vec<(String, String)>,
 }
 
 /// A `CombiRank` at or above this marks a species the generic rule never
@@ -121,16 +125,6 @@ impl BreedingIndex {
         if tribe.is_empty() || rank == 0 || rank >= RANK_SENTINEL {
             return;
         }
-        // `IgnoreCombi` is the game's own "this one does not breed" flag, and
-        // a non-Pal cannot enter a farm either. Such a row is not a parent at
-        // all, so it is kept out of `parents` entirely rather than merely out
-        // of the candidate pool: leaving it in made `child_of` answer for
-        // Panthalus and Astralym, and the answer was nearest-rank noise — a
-        // species the pair cannot actually produce. Callers read a `Some` as
-        // "this pairing works", so the only honest reply here is `None`.
-        if !is_pal || ignore_combi {
-            return;
-        }
         self.parents.insert(
             key.to_owned(),
             Parent {
@@ -138,6 +132,19 @@ impl BreedingIndex {
                 rank,
             },
         );
+
+        // `IgnoreCombi` keeps a species out of the *candidate pool* — the set
+        // the generic `CombiRank` rule can land on — and nothing more. It is
+        // emphatically not a "cannot breed" flag: Frostallion, Jetragon,
+        // Paladius, Necromus and Bellanoir all carry it and all breed. What it
+        // means is that no arbitrary pairing produces them; they come only
+        // from a `DT_PalCombiUnique` row. So they stay in `parents`, and a
+        // caller asking what two of them make gets the generic answer, which
+        // is the game's answer too.
+        if !is_pal || ignore_combi {
+            self.ignored.push((key.to_owned(), character_id.to_owned()));
+            return;
+        }
         // One candidate per tribe. The canonical member is the row named after
         // the tribe; a Paldeck number breaks any remaining tie. Without this,
         // quest duplicates (`Quest_Farmer03_SheepBall`) and unique-combo-only
@@ -178,10 +185,42 @@ impl BreedingIndex {
             .insert(tribe_pair(tribe_a, tribe_b), child.to_owned());
     }
 
-    /// Sort the candidate pool. Call once after all rows are added.
+    /// Sort the candidate pool and drop the species the game gives no breeding
+    /// route to. Call once after all rows are added.
+    ///
+    /// `IgnoreCombi` on its own means only "the generic rule never lands on
+    /// this" — Frostallion, Jetragon, Paladius, Necromus and Bellanoir all
+    /// carry it and all breed, because a `DT_PalCombiUnique` row names each of
+    /// them. A species carrying it with *no* unique combo naming it is a
+    /// different thing: nothing produces it, and it is not a farm parent
+    /// either. In the shipped data that is Panthalus, Astralym and the two
+    /// Yakushima raid bosses.
+    ///
+    /// This has to happen here rather than as rows arrive, because whether a
+    /// unique combo names a species is not known until every row has been read.
     pub(crate) fn finish(&mut self) {
         self.pool
             .sort_by(|a, b| a.rank.cmp(&b.rank).then_with(|| a.tribe.cmp(&b.tribe)));
+
+        // Normalized to lookup keys, not raw ids: several rows share one key
+        // (`BOSS_BlackCentaur` and `BlackCentaur` are both `blackcentaur`), and
+        // comparing raw ids removed Necromus because its *alpha* row is not
+        // itself a breeding result.
+        let producible: HashSet<String> = self
+            .pool
+            .iter()
+            .map(|c| crate::extract::normalize_key(&c.character_id))
+            .chain(
+                self.unique
+                    .values()
+                    .map(|v| crate::extract::normalize_key(v)),
+            )
+            .collect();
+        for (key, _) in std::mem::take(&mut self.ignored) {
+            if !producible.contains(&crate::extract::normalize_key(&key)) {
+                self.parents.remove(&key);
+            }
+        }
     }
 
     #[must_use]
@@ -259,9 +298,16 @@ mod tests {
         add(&mut b, "c", "C", "TribeC", 120, false, 30);
         // A quest duplicate of TribeA must not enter the pool.
         add(&mut b, "quest_a", "Quest_A", "TribeA", 100, false, 0);
-        // `IgnoreCombi`: the game does not breed this one at all — neither a
-        // parent nor a possible child.
+        // Two `IgnoreCombi` species, which differ only in whether a unique
+        // combo names them — the distinction `finish` acts on.
+        //
+        // `X` has none, so nothing produces it and it is not a parent either:
+        // the shipped data's Panthalus and Astralym.
         add(&mut b, "x", "X", "TribeX", 130, true, 40);
+        // `Y` is named by one, so it breeds true and is a perfectly good
+        // parent: the shipped data's Frostallion, Jetragon and friends.
+        add(&mut b, "y", "Y", "TribeY", 140, true, 50);
+        b.add_unique("TribeY", "TribeY", "Y");
         b.finish();
         b
     }
@@ -309,24 +355,42 @@ mod tests {
         assert_eq!(b.child_of("b", "a"), Some("SpecialChild"));
     }
 
-    /// An `IgnoreCombi` species does not breed at all.
+    /// An `IgnoreCombi` species is still a parent — the flag only keeps it out
+    /// of the generic candidate pool.
     ///
-    /// It is neither a candidate child nor a usable parent, so every lookup
-    /// naming it answers `None`. Answering with the nearest rank instead would
-    /// read as a working pairing — the caller cannot tell a real result from a
-    /// fallback — and the four species this covers in the shipped data
-    /// (Panthalus, Astralym and the two Yakushima raid bosses) genuinely
-    /// cannot be put in a farm.
+    /// It is emphatically not "cannot breed". Frostallion, Jetragon, Paladius,
+    /// Necromus and Bellanoir all carry it in the shipped data and all breed;
+    /// what they cannot be is the result of an *arbitrary* pairing. They come
+    /// from a `DT_PalCombiUnique` row instead, which `child_of` consults first
+    /// — see `unique_combos_override_the_generic_rule`.
+    /// An `IgnoreCombi` species named by a unique combo breeds normally.
+    ///
+    /// This is how every legendary behaves. The flag only keeps it out of the
+    /// generic candidate pool; the unique table, which `child_of` consults
+    /// first, still produces it, and it stays a usable parent.
     #[test]
-    fn an_ignored_species_does_not_breed_at_all() {
+    fn an_ignored_species_with_a_unique_combo_still_breeds() {
+        let b = index();
+        assert_eq!(b.child_of("y", "y"), Some("Y"), "breeds true via its unique combo");
+        assert!(b.child_of("y", "a").is_some(), "and is a parent alongside anything else");
+        assert!(
+            b.pool.iter().all(|c| c.character_id != "Y"),
+            "even though the generic rule never lands on it"
+        );
+    }
+
+    /// An `IgnoreCombi` species with no unique combo has no breeding route at
+    /// all, so it is dropped as a parent too.
+    ///
+    /// Answering with the nearest rank would read as a working pairing when the
+    /// game offers none.
+    #[test]
+    fn an_ignored_species_with_no_unique_combo_does_not_breed() {
         let b = index();
         assert_eq!(b.child_of("x", "x"), None, "not a parent");
-        assert_eq!(b.child_of("x", "a"), None, "not a parent alongside anything else");
+        assert_eq!(b.child_of("x", "a"), None, "nor alongside anything else");
         assert_eq!(b.child_of("a", "x"), None, "either way round");
-        assert!(
-            b.pool.iter().all(|c| c.character_id != "X"),
-            "and never a child"
-        );
+        assert!(b.pool.iter().all(|c| c.character_id != "X"), "and never a child");
     }
 
     /// A species merely *shadowed* by its tribe's representative is different:

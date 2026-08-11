@@ -903,11 +903,17 @@ fn parent_view(
 /// some pairing produces.
 ///
 /// The Paldeck is the wrong list for this picker. It includes species nothing
-/// breeds into: the four the game bars from breeding entirely (Panthalus,
-/// Astralym and the two Yakushima raid bosses), and variant forms like
-/// `PlantSlime_Flower` that are shadowed by their base species — a pair of
-/// them yields Gumoss, so nothing produces the variant itself. Offering those
-/// as targets promises a result that cannot exist.
+/// breeds into: Panthalus, Astralym and the two Yakushima raid bosses, which
+/// are outside the generic candidate pool and have no unique combo naming
+/// them, and variant forms like `PlantSlime_Flower` that are shadowed by their
+/// base species — a pair of them yields Gumoss, so nothing produces the
+/// variant itself. Offering those as targets promises a result that cannot
+/// exist.
+///
+/// This is *not* a "can this Pal breed" filter, and must not be confused with
+/// one. Frostallion, Jetragon, Paladius, Necromus and Bellanoir all sit
+/// outside the generic pool too, yet each has a unique combo that breeds it
+/// true — they belong in the picker and are perfectly good parents.
 ///
 /// # Errors
 ///
@@ -1372,14 +1378,21 @@ mod tests {
 
         // A target the roster cannot already breed is where this list earns
         // its keep, so prefer one; fall back to any reachable species.
-        let target = index
+        //
+        // Sorted rather than taken in `species_iter` order: that order is not
+        // stable between runs, and picking a different target each time made
+        // this test pass or fail depending on which needs the chosen species
+        // happened to exercise.
+        let mut candidates: Vec<String> = index
             .species_iter()
             .filter(|s| s.dex_number.is_some())
             .map(|s| s.character_id.clone())
-            .find(|t| {
-                breeding_view(&views, &pals, t, index).is_empty()
-                    && !unowned_view(&views, &pals, t, index).is_empty()
-            });
+            .collect();
+        candidates.sort();
+        let target = candidates.into_iter().find(|t| {
+            breeding_view(&views, &pals, t, index).is_empty()
+                && !unowned_view(&views, &pals, t, index).is_empty()
+        });
         let Some(target) = target else {
             eprintln!("skipping: the roster can already breed everything reachable");
             return;
@@ -1394,27 +1407,53 @@ mod tests {
         assert!(!pairings.is_empty());
 
         for p in &pairings {
-            assert!(
-                !p.missing_species.is_empty(),
-                "{} + {} needs nothing — it belongs in the owned list",
-                p.parent_a.character_id,
-                p.parent_b.character_id
-            );
-            assert!(
-                p.parent_a.owned.is_none() || p.parent_b.owned.is_none(),
-                "at least one side must be the species you lack"
-            );
-            // An owned side must actually be owned, and an unowned side must not be.
-            for side in [&p.parent_a, &p.parent_b] {
-                let is_owned = owned.contains(&side.character_id.to_ascii_lowercase());
-                assert_eq!(
-                    side.owned.is_some(),
-                    is_owned,
-                    "{} is {} but was reported as {}",
-                    side.character_id,
-                    if is_owned { "owned" } else { "unowned" },
-                    if side.owned.is_some() { "owned" } else { "unowned" }
-                );
+            let label = format!("{} + {}", p.parent_a.character_id, p.parent_b.character_id);
+            // Every row must be waiting on something. Which "something" decides
+            // what the rest of the row is allowed to look like: only the
+            // species-missing needs populate `missing_species`, and only they
+            // leave a side genuinely unowned.
+            match p.need.as_str() {
+                "oneSpecies" | "twoSpecies" => {
+                    assert!(!p.missing_species.is_empty(), "{label}: must name what is missing");
+                    assert!(
+                        p.parent_a.owned.is_none() || p.parent_b.owned.is_none(),
+                        "{label}: at least one side must be the species you lack"
+                    );
+                    // An owned side is owned, an unowned side is not.
+                    for side in [&p.parent_a, &p.parent_b] {
+                        let is_owned = owned.contains(&side.character_id.to_ascii_lowercase());
+                        assert_eq!(
+                            side.owned.is_some(),
+                            is_owned,
+                            "{} is {} but was reported otherwise",
+                            side.character_id,
+                            if is_owned { "owned" } else { "unowned" }
+                        );
+                    }
+                }
+                "secondSpecimen" => {
+                    assert!(
+                        p.parent_a.character_id.eq_ignore_ascii_case(&p.parent_b.character_id),
+                        "{label}: a second specimen is only ever a species with itself"
+                    );
+                    assert!(p.parent_a.owned.is_some(), "{label}: the one you have is shown");
+                    assert!(p.parent_b.owned.is_none(), "{label}: the slot to fill is empty");
+                    assert!(
+                        owned.contains(&p.parent_a.character_id.to_ascii_lowercase()),
+                        "{label}: the species itself is owned — only a second one is missing"
+                    );
+                }
+                "oppositeGender" => {
+                    assert!(
+                        p.parent_a.owned.is_some() && p.parent_b.owned.is_some(),
+                        "{label}: both sides are owned; only the gender is missing"
+                    );
+                    assert!(
+                        p.missing_species.is_empty(),
+                        "{label}: no species is missing from the roster here"
+                    );
+                }
+                other => panic!("{label}: unexpected need {other}"),
             }
             // The pairing must genuinely produce what was asked for.
             let child = index
@@ -1616,7 +1655,7 @@ mod tests {
         eprintln!("{} producible species offered as targets", targets.len());
         assert!(targets.len() > 200, "most species should be breedable into");
 
-        // Barred from breeding entirely — neither parent nor child.
+        // No pairing produces these, so they cannot be asked for.
         for id in [
             "KingWhale",                   // Panthalus
             "WorldTreeDragon",             // Astralym
@@ -1625,7 +1664,28 @@ mod tests {
         ] {
             assert!(
                 !targets.contains(&id.to_ascii_lowercase()),
-                "{id} cannot be bred, so it must not be offered as a target"
+                "{id} cannot be bred into, so it must not be offered as a target"
+            );
+        }
+
+        // The legendaries must survive the filter. They sit outside the generic
+        // candidate pool, which is easy to mistake for "cannot breed" — doing
+        // so silently drops a third of the endgame from the picker.
+        for (id, name) in [
+            ("IceHorse", "Frostallion"),
+            ("IceHorse_Dark", "Frostallion Noct"),
+            ("JetDragon", "Jetragon"),
+            ("SaintCentaur", "Paladius"),
+            ("BlackCentaur", "Necromus"),
+            ("NightLady", "Bellanoir"),
+        ] {
+            assert!(
+                targets.contains(&id.to_ascii_lowercase()),
+                "{name} breeds true through a unique combo and must be offered"
+            );
+            assert!(
+                index.breeding_result(id, "SheepBall").is_some(),
+                "{name} must also still work as a parent"
             );
         }
 
