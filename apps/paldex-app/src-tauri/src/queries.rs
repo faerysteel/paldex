@@ -235,27 +235,21 @@ pub struct PairingSideView {
     pub owned: Option<BreedingParentView>,
 }
 
-/// A combination whose species are both owned but which still cannot be bred.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BlockedPairingView {
-    pub parent_a: BreedingParentView,
-    pub parent_b: BreedingParentView,
-    /// `sameGender` or `onlySpecimen` — why the farm can't be filled.
-    pub reason: String,
-    /// The gender every owned candidate shares, when that is the blocker;
-    /// `None` when the problem is simply owning one of something.
-    pub blocking_gender: Option<String>,
-}
-
-/// A pairing needing at least one species the player does not own.
+/// A pairing needing a Pal the player doesn't have — either a species missing
+/// from the roster, or a second specimen of one already in it.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnownedPairingView {
     pub parent_a: PairingSideView,
     pub parent_b: PairingSideView,
-    /// The distinct species that would have to be obtained — one, or two when
-    /// neither parent is owned.
+    /// `secondSpecimen`, `oppositeGender`, `oneSpecies` or `twoSpecies` —
+    /// what the combination is waiting on, smallest ask first.
+    pub need: String,
+    /// The gender every owned candidate shares, for `oppositeGender`; `None`
+    /// for every other need.
+    pub blocking_gender: Option<String>,
+    /// Species missing from the roster entirely — empty when both sides are
+    /// owned and only another Pal of one of them is needed.
     pub missing_species: Vec<String>,
 }
 

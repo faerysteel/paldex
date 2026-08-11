@@ -208,26 +208,28 @@ export interface PairingSideView {
 }
 
 /**
- * Why a combination whose species you both own still can't be bred.
- * `sameGender` — every candidate shares one gender; `onlySpecimen` — it pairs
- * a species with itself and you own exactly one.
+ * What a pairing is waiting on, smallest ask first. Every one of these is a
+ * Pal you don't currently have — a female Lamball you don't own is as much an
+ * errand as a Lamball you don't own.
  */
-export type BlockedReason = "sameGender" | "onlySpecimen";
+export type PairingNeed =
+  | "secondSpecimen"
+  | "oppositeGender"
+  | "oneSpecies"
+  | "twoSpecies";
 
-/** A combination you own both species of but still cannot breed. */
-export interface BlockedPairingView {
-  parentA: BreedingParentView;
-  parentB: BreedingParentView;
-  reason: BlockedReason;
-  /** The gender every candidate shares, or null when that isn't the blocker. */
-  blockingGender: "male" | "female" | null;
-}
-
-/** A pairing needing at least one species you don't own. */
+/**
+ * A pairing you can't breed today, and what it's waiting on — a species
+ * missing from your roster, a second specimen of one already in it, or one of
+ * the opposite gender.
+ */
 export interface UnownedPairingView {
   parentA: PairingSideView;
   parentB: PairingSideView;
-  /** The distinct species you'd need to obtain — one, or two when neither is owned. */
+  need: PairingNeed;
+  /** The gender every candidate shares, for `oppositeGender`; null otherwise. */
+  blockingGender: "male" | "female" | null;
+  /** Species missing from your roster entirely; empty when you own both sides. */
   missingSpecies: string[];
 }
 

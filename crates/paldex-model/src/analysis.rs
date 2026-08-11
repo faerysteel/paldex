@@ -217,101 +217,22 @@ where
     pairs
 }
 
-/// Why a combination of two owned species still can't be put in a farm.
-///
-/// Ordered by how close to solved it is, which is the order the list uses:
-/// one more specimen is less work than an opposite-gender one you may have to
-/// hunt for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub enum BlockedReason {
-    /// The combination is a species with itself and only one is owned. A Pal
-    /// cannot breed with itself, so a second one is needed.
-    OnlySpecimen,
-    /// Every owned candidate across both sides shares one gender, so no farm
-    /// can be filled — an opposite-gender specimen of either side unblocks it.
-    SameGender,
+/// A self-pairing the player owns exactly one of. A Pal cannot breed with
+/// itself, so this needs a second specimen rather than a different gender.
+fn needs_second_specimen(side: &[&Pal], same_species: bool) -> bool {
+    same_species && side.len() < 2
 }
 
-/// A combination the player owns both sides of but still cannot breed.
-///
-/// Without this these fall through every list: [`breeding_suggestions`] drops
-/// them for having no breedable pair, and [`unowned_pairings`] excludes them
-/// for having nothing missing. Together the three cover every combination
-/// that produces a given target.
-#[derive(Debug, Clone, Serialize)]
-pub struct BlockedPairing<'a> {
-    pub species_a: String,
-    pub species_b: String,
-    /// The best owned specimen of each side — both are owned by definition.
-    pub best_a: &'a Pal,
-    pub best_b: &'a Pal,
-    pub reason: BlockedReason,
-    /// The gender every owned candidate shares, when that is the blocker.
-    pub blocking_gender: Option<Gender>,
-}
-
-/// Combinations for `target` whose species are both owned but which still
-/// cannot be bred, and why.
-///
-/// Gender is judged over *every* owned individual, not the truncated candidate
-/// lists [`breeding_suggestions`] ranks with: reporting a combination as
-/// blocked when a usable specimen merely fell outside the top few would be
-/// worse than saying nothing.
-#[must_use]
-pub fn blocked_pairings<'a, F>(pals: &'a [Pal], target: &str, child_of: F) -> Vec<BlockedPairing<'a>>
-where
-    F: Fn(&str, &str) -> Option<String>,
-{
-    let groups = sorted_species_groups(pals);
-
-    let mut blocked = Vec::new();
-    for (i, (id_a, side_a)) in groups.iter().enumerate() {
-        for (j, (id_b, side_b)) in groups.iter().enumerate().skip(i) {
-            if !child_of(id_a, id_b).is_some_and(|child| child.eq_ignore_ascii_case(target)) {
-                continue;
-            }
-            let Some((reason, blocking_gender)) = blocking(side_a, side_b, i == j) else {
-                continue;
-            };
-            blocked.push(BlockedPairing {
-                species_a: (*id_a).to_owned(),
-                species_b: (*id_b).to_owned(),
-                best_a: side_a[0],
-                best_b: side_b[0],
-                reason,
-                blocking_gender,
-            });
-        }
-    }
-
-    // A single missing specimen is closer to solved than a whole gender, and
-    // within each reason the better stock comes first.
-    blocked.sort_by(|x, y| {
-        x.reason
-            .cmp(&y.reason)
-            .then_with(|| {
-                grade_ivs(&y.best_a.ivs)
-                    .composite
-                    .total_cmp(&grade_ivs(&x.best_a.ivs).composite)
-            })
-            .then_with(|| x.species_a.cmp(&y.species_a))
-            .then_with(|| x.species_b.cmp(&y.species_b))
-    });
-    blocked
-}
-
-/// Why these two owned sides cannot produce a pair, or `None` if they can.
+/// The gender every owned candidate shares, when that is what stops these two
+/// sides pairing, or `None` if a farm can be filled.
 ///
 /// Exact rather than sampled: it reads the genders present across every owned
 /// individual. [`Gender::Unknown`] pairs with anything (see [`can_breed`]), so
 /// its presence on either side always unblocks the combination.
-fn blocking(a: &[&Pal], b: &[&Pal], same_species: bool) -> Option<(BlockedReason, Option<Gender>)> {
-    if same_species && a.len() < 2 {
-        return Some((BlockedReason::OnlySpecimen, None));
-    }
+fn blocking_gender(a: &[&Pal], b: &[&Pal]) -> Option<Gender> {
     let genders: HashSet<Gender> = a.iter().chain(b.iter()).map(|pal| pal.gender).collect();
     match genders.iter().copied().collect::<Vec<_>>()[..] {
-        [only] if only != Gender::Unknown => Some((BlockedReason::SameGender, Some(only))),
+        [only] if only != Gender::Unknown => Some(only),
         _ => None,
     }
 }
@@ -327,26 +248,62 @@ pub struct UnownedPairing<'a> {
     pub species_a: String,
     pub species_b: String,
     /// The best owned specimen of `species_a`, or `None` if it is unowned.
+    ///
+    /// For [`PairingNeed::SecondSpecimen`] the one owned Pal sits in `owned_a`
+    /// and `owned_b` is `None` — the empty slot is the second Pal that has to
+    /// be obtained, not a species the player lacks. For
+    /// [`PairingNeed::OppositeGender`] *both* are filled: the player owns
+    /// everything, just not in two genders.
     pub owned_a: Option<&'a Pal>,
     pub owned_b: Option<&'a Pal>,
-    /// The distinct species that would have to be obtained — one entry, or
-    /// two when neither parent is owned. A pairing of an unowned species with
-    /// itself needs that one species, not two.
+    pub need: PairingNeed,
+    /// The gender every owned candidate shares, for
+    /// [`PairingNeed::OppositeGender`]; `None` for every other need.
+    pub blocking_gender: Option<Gender>,
+    /// Species missing from the roster entirely — empty when the player owns
+    /// both sides and merely needs another Pal of one of them.
     pub missing_species: Vec<String>,
 }
 
-/// Pairings for `target` that need at least one species the player does not
-/// own, best first.
+/// What a pairing would cost the player to make possible.
 ///
-/// The counterpart to [`breeding_suggestions`], which only ever pairs Pals
-/// already in the roster and so cannot answer "what would I have to catch".
-/// `species` is the candidate universe — inject the Paldeck, since a parent
-/// the player cannot recognise is not a usable suggestion.
+/// Every variant is a Pal the player does not currently have, which is what
+/// makes them one list: a female Lamball you don't own is as much an errand as
+/// a Lamball you don't own. Declaration order is effort order, and the list is
+/// sorted by it — another of something already in the box is the smallest ask,
+/// two brand-new species the largest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum PairingNeed {
+    /// Both slots are one species already owned, but only one specimen is —
+    /// and a Pal cannot breed with itself, so a second one is needed.
+    SecondSpecimen,
+    /// Every owned candidate across both sides is the same gender, so a farm
+    /// cannot be filled until an opposite-gender one turns up.
+    OppositeGender,
+    /// One parent species is missing from the roster.
+    OneSpecies,
+    /// Neither parent species is owned.
+    TwoSpecies,
+}
+
+/// Everything for `target` the player cannot breed today, and what each one is
+/// waiting on — smallest ask first.
 ///
-/// Ordered by how much work the pairing implies: one new species before two,
-/// then by the quality of the specimen already owned, then by name so the
-/// list is stable. Pairings where *both* species are owned are excluded —
-/// those are [`breeding_suggestions`]' job.
+/// The counterpart to [`breeding_suggestions`]: between them they cover every
+/// combination that produces the target, with no overlap. A combination is
+/// either breedable right now or it is here, waiting on a Pal that is not in
+/// the box — a species never caught, a second of something owned singly, or
+/// one of the opposite gender.
+///
+/// `species` is the candidate universe for the *unowned* half — inject the
+/// Paldeck, since a parent the player cannot recognise is not a usable
+/// suggestion. Owned species are always considered whether or not they are in
+/// it, so a quest form nobody has a Paldeck entry for cannot fall through.
+///
+/// Gender is judged over *every* owned individual, not the truncated candidate
+/// lists [`breeding_suggestions`] ranks with: telling the player a combination
+/// is stuck when a usable specimen merely fell outside the top few would be
+/// worse than saying nothing.
 #[must_use]
 pub fn unowned_pairings<'a, F>(
     pals: &'a [Pal],
@@ -361,19 +318,16 @@ where
     // inconsistent (`Sheepball` vs `SheepBall`), so a case mismatch between
     // the roster and the species list would report an owned species as
     // missing — the one error this whole screen must not make.
-    let mut best_owned: HashMap<String, &Pal> = HashMap::new();
-    for pal in pals {
-        best_owned
-            .entry(pal.character_id.to_ascii_lowercase())
-            .and_modify(|current| {
-                if is_better(pal, current) {
-                    *current = pal;
-                }
-            })
-            .or_insert(pal);
+    let owned = group_by_species(pals);
+    let mut owned: HashMap<String, Vec<&Pal>> = owned;
+    for group in owned.values_mut() {
+        group.sort_by(best_first);
     }
 
+    // Owned species join the universe whether or not the caller listed them,
+    // so a form with no Paldeck entry can still be a parent.
     let mut candidates: Vec<&str> = species.to_vec();
+    candidates.extend(pals.iter().map(|pal| pal.character_id.as_str()));
     candidates.sort_unstable_by_key(|s| s.to_ascii_lowercase());
     candidates.dedup_by_key(|s| s.to_ascii_lowercase());
 
@@ -383,34 +337,53 @@ where
             if !child_of(a, b).is_some_and(|child| child.eq_ignore_ascii_case(target)) {
                 continue;
             }
-            let owned_a = best_owned.get(&a.to_ascii_lowercase()).copied();
-            let owned_b = best_owned.get(&b.to_ascii_lowercase()).copied();
-            if owned_a.is_some() && owned_b.is_some() {
-                continue;
-            }
+            let same_species = b.eq_ignore_ascii_case(a);
+            let side_a = owned.get(&a.to_ascii_lowercase());
+            let side_b = owned.get(&b.to_ascii_lowercase());
 
-            let mut missing_species = Vec::new();
-            if owned_a.is_none() {
-                missing_species.push((*a).to_owned());
-            }
-            if owned_b.is_none() && !b.eq_ignore_ascii_case(a) {
-                missing_species.push((*b).to_owned());
-            }
+            let (need, blocking, missing_species) = match (side_a, side_b) {
+                // Both species owned: the player needs another Pal only if the
+                // ones in the box cannot be paired. Otherwise it is breedable
+                // today and belongs to `breeding_suggestions`.
+                (Some(group_a), Some(group_b)) => {
+                    if needs_second_specimen(group_a, same_species) {
+                        (PairingNeed::SecondSpecimen, None, Vec::new())
+                    } else if let Some(gender) = blocking_gender(group_a, group_b) {
+                        (PairingNeed::OppositeGender, Some(gender), Vec::new())
+                    } else {
+                        continue;
+                    }
+                }
+                (Some(_), None) => (PairingNeed::OneSpecies, None, vec![(*b).to_owned()]),
+                (None, Some(_)) => (PairingNeed::OneSpecies, None, vec![(*a).to_owned()]),
+                (None, None) if same_species => {
+                    (PairingNeed::OneSpecies, None, vec![(*a).to_owned()])
+                }
+                (None, None) => (
+                    PairingNeed::TwoSpecies,
+                    None,
+                    vec![(*a).to_owned(), (*b).to_owned()],
+                ),
+            };
 
+            let best = |side: Option<&Vec<&'a Pal>>| side.map(|group| group[0]);
             pairings.push(UnownedPairing {
                 species_a: (*a).to_owned(),
                 species_b: (*b).to_owned(),
-                owned_a,
-                owned_b,
+                owned_a: best(side_a),
+                // For a second-specimen need the empty slot is B: the one Pal
+                // owned always lands in `owned_a`, and B is what to go and get.
+                owned_b: if need == PairingNeed::SecondSpecimen { None } else { best(side_b) },
+                need,
+                blocking_gender: blocking,
                 missing_species,
             });
         }
     }
 
     pairings.sort_by(|x, y| {
-        x.missing_species
-            .len()
-            .cmp(&y.missing_species.len())
+        x.need
+            .cmp(&y.need)
             .then_with(|| owned_score(y).total_cmp(&owned_score(x)))
             .then_with(|| x.species_a.cmp(&y.species_a))
             .then_with(|| x.species_b.cmp(&y.species_b))
@@ -854,50 +827,111 @@ mod tests {
     const ALL_SPECIES: [&str; 4] = ["Chikipi", "Foxparks", "Lamball", "Vixy"];
 
     #[test]
-    fn blocked_pairings_report_an_all_male_combination() {
+    fn an_all_male_combination_needs_an_opposite_gender_pal() {
         let pals = vec![
             gendered("Lamball", ivs(50), 10, Gender::Male),
             gendered("Chikipi", ivs(60), 10, Gender::Male),
         ];
 
-        let blocked = blocked_pairings(&pals, "Vixy", fake_table);
-        assert_eq!(blocked.len(), 1, "one owned combination, and it is stuck");
-        assert_eq!(blocked[0].reason, BlockedReason::SameGender);
-        assert_eq!(blocked[0].blocking_gender, Some(Gender::Male));
+        let pairings = unowned_pairings(&pals, &ALL_SPECIES, "Vixy", fake_table);
+        let stuck = pairings
+            .iter()
+            .find(|p| p.need == PairingNeed::OppositeGender)
+            .expect("two males of two species cannot pair");
+        assert_eq!(stuck.blocking_gender, Some(Gender::Male));
+        assert!(
+            stuck.owned_a.is_some() && stuck.owned_b.is_some(),
+            "both species are owned; only the gender is missing"
+        );
+        assert!(
+            stuck.missing_species.is_empty(),
+            "no species is missing from the roster here"
+        );
         assert!(
             breeding_suggestions(&pals, "Vixy", fake_table).is_empty(),
-            "the same combination must not appear as a usable pair"
+            "the same combination must not also appear as a usable pair"
         );
     }
 
+    /// Owning one of something is a different errand from owning two of one
+    /// gender, and the list says which.
     #[test]
-    fn a_lone_pal_is_blocked_for_being_alone_not_for_its_gender() {
+    fn owning_only_one_asks_for_a_second_specimen() {
         let pals = vec![gendered("Lamball", ivs(50), 10, Gender::Male)];
-        let blocked = blocked_pairings(&pals, "Lamball", fake_table);
-        assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].reason, BlockedReason::OnlySpecimen);
-        assert_eq!(blocked[0].blocking_gender, None, "gender is not the problem here");
+
+        let pairings = unowned_pairings(&pals, &ALL_SPECIES, "Lamball", fake_table);
+        let self_pair = pairings
+            .iter()
+            .find(|p| p.species_a == "Lamball" && p.species_b == "Lamball")
+            .expect("Lamball + Lamball should ask for a second Lamball");
+        assert_eq!(self_pair.need, PairingNeed::SecondSpecimen);
+        assert_eq!(self_pair.blocking_gender, None, "gender is not the problem here");
+        assert!(self_pair.owned_a.is_some(), "the one you have is shown");
+        assert!(self_pair.owned_b.is_none(), "the slot you must fill is empty");
+    }
+
+    /// Owning two of a species means the self-pairing is no longer about
+    /// numbers — if it still cannot be bred, it is about gender.
+    #[test]
+    fn two_of_one_gender_asks_for_the_other_gender() {
+        let pals = vec![
+            gendered("Lamball", ivs(50), 10, Gender::Male),
+            gendered("Lamball", ivs(40), 10, Gender::Male),
+        ];
+
+        let pairings = unowned_pairings(&pals, &ALL_SPECIES, "Lamball", fake_table);
+        let self_pair = pairings
+            .iter()
+            .find(|p| p.species_a == "Lamball" && p.species_b == "Lamball")
+            .expect("two male Lamballs still cannot pair");
+        assert_eq!(self_pair.need, PairingNeed::OppositeGender);
+        assert_eq!(self_pair.blocking_gender, Some(Gender::Male));
+    }
+
+    /// The needs escalate: another of something owned, then the other gender,
+    /// then a new species, then two.
+    #[test]
+    fn needs_are_ordered_by_how_much_work_they_imply() {
+        let pals = vec![gendered("Lamball", ivs(50), 10, Gender::Male)];
+        let all = unowned_pairings(&pals, &ALL_SPECIES, "Lamball", fake_table);
+        for w in all.windows(2) {
+            assert!(w[0].need <= w[1].need, "needs must escalate down the list");
+        }
+        assert_eq!(all[0].need, PairingNeed::SecondSpecimen);
+        assert!(PairingNeed::SecondSpecimen < PairingNeed::OppositeGender);
+        assert!(PairingNeed::OppositeGender < PairingNeed::OneSpecies);
+        assert!(PairingNeed::OneSpecies < PairingNeed::TwoSpecies);
     }
 
     #[test]
-    fn a_breedable_combination_is_never_reported_as_blocked() {
+    fn a_breedable_combination_is_never_listed_as_needing_anything() {
         let pals = vec![
             gendered("Lamball", ivs(50), 10, Gender::Male),
             gendered("Chikipi", ivs(60), 10, Gender::Female),
         ];
-        assert!(blocked_pairings(&pals, "Vixy", fake_table).is_empty());
+        let pairings = unowned_pairings(&pals, &ALL_SPECIES, "Vixy", fake_table);
+        assert!(
+            !pairings
+                .iter()
+                .any(|p| p.species_a == "Chikipi" && p.species_b == "Lamball"),
+            "this pair can be bred today"
+        );
         assert_eq!(breeding_suggestions(&pals, "Vixy", fake_table).len(), 1);
     }
 
-    /// An unknown gender pairs with anything, so it cannot be the thing that
-    /// blocks a combination.
+    /// An unknown gender pairs with anything, so it cannot be what a
+    /// combination is waiting on.
     #[test]
     fn an_unknown_gender_never_blocks() {
         let pals = vec![
             gendered("Lamball", ivs(50), 10, Gender::Male),
             gendered("Chikipi", ivs(60), 10, Gender::Unknown),
         ];
-        assert!(blocked_pairings(&pals, "Vixy", fake_table).is_empty());
+        assert!(
+            !unowned_pairings(&pals, &ALL_SPECIES, "Vixy", fake_table)
+                .iter()
+                .any(|p| p.need == PairingNeed::OppositeGender)
+        );
     }
 
     /// Regression: candidates used to be truncated to the best few by IV
@@ -913,8 +947,10 @@ mod tests {
         pals.push(gendered("Lamball", ivs(1), 1, Gender::Female));
 
         assert!(
-            blocked_pairings(&pals, "Lamball", fake_table).is_empty(),
-            "a female exists, so this combination is not blocked"
+            !unowned_pairings(&pals, &ALL_SPECIES, "Lamball", fake_table)
+                .iter()
+                .any(|p| p.species_a == "Lamball" && p.species_b == "Lamball"),
+            "a female exists, so this combination is not waiting on anything"
         );
         let pairs = breeding_suggestions(&pals, "Lamball", fake_table);
         assert_eq!(pairs.len(), 1, "the pair must still be offered");
@@ -925,9 +961,8 @@ mod tests {
         );
     }
 
-    /// The three lists partition the combinations that produce a target: every
-    /// one is breedable now, blocked, or needs a species you lack — never two
-    /// of those, and never none.
+    /// The two lists partition the combinations that produce a target: every
+    /// one is breedable now or waiting on a Pal — never both, never neither.
     #[test]
     fn every_combination_lands_in_exactly_one_list() {
         let pals = vec![
@@ -936,15 +971,11 @@ mod tests {
         ];
 
         for target in ["Vixy", "Lamball", "Chikipi"] {
-            let owned: HashSet<(String, String)> = breeding_suggestions(&pals, target, fake_table)
+            let breedable: HashSet<(String, String)> = breeding_suggestions(&pals, target, fake_table)
                 .iter()
                 .map(|p| species_key(&p.parent_a.character_id, &p.parent_b.character_id))
                 .collect();
-            let blocked: HashSet<(String, String)> = blocked_pairings(&pals, target, fake_table)
-                .iter()
-                .map(|p| species_key(&p.species_a, &p.species_b))
-                .collect();
-            let lacking: HashSet<(String, String)> =
+            let waiting: HashSet<(String, String)> =
                 unowned_pairings(&pals, &ALL_SPECIES, target, fake_table)
                     .iter()
                     .map(|p| species_key(&p.species_a, &p.species_b))
@@ -960,14 +991,12 @@ mod tests {
                 }
             }
 
-            let union: HashSet<_> = owned.union(&blocked).cloned().collect::<HashSet<_>>()
-                .union(&lacking)
-                .cloned()
-                .collect();
-            assert_eq!(union, expected, "{target}: some combination fell through the lists");
-            assert!(owned.is_disjoint(&blocked), "{target}: breedable and blocked overlap");
-            assert!(owned.is_disjoint(&lacking), "{target}: breedable and unowned overlap");
-            assert!(blocked.is_disjoint(&lacking), "{target}: blocked and unowned overlap");
+            let union: HashSet<_> = breedable.union(&waiting).cloned().collect();
+            assert_eq!(union, expected, "{target}: some combination fell through both lists");
+            assert!(
+                breedable.is_disjoint(&waiting),
+                "{target}: a combination is both breedable and waiting"
+            );
         }
     }
 

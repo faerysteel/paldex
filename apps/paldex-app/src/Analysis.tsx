@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
-  BlockedPairingView,
   BreedingPairView,
   BreedingParentView,
   DexProgressView,
   GradedPalView,
   IvTier,
+  PairingNeed,
   PairingSideView,
   PalQualityView,
   SnapshotSummaryView,
@@ -245,7 +245,7 @@ export default function Analysis({ summary }: Props) {
 }
 
 /** Which parent pool the breeding results are drawn from. */
-type Pool = "owned" | "blocked" | "unowned";
+type Pool = "owned" | "unowned";
 
 const POOLS: { id: Pool; label: string; hint: string }[] = [
   {
@@ -254,14 +254,9 @@ const POOLS: { id: Pool; label: string; hint: string }[] = [
     hint: "Both parents are Pals in this world, and you can breed them now",
   },
   {
-    id: "blocked",
-    label: "Blocked",
-    hint: "You own both species but can't fill a farm with them",
-  },
-  {
     id: "unowned",
     label: "Unowned parents",
-    hint: "Combinations needing at least one species you don't own",
+    hint: "Combinations waiting on a Pal you don't have — a new species, a second of one you own, or the other gender",
   },
 ];
 
@@ -283,7 +278,6 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
   const [target, setTarget] = useState("");
   const [pool, setPool] = useState<Pool>("owned");
   const [pairs, setPairs] = useState<BreedingPairView[] | null>(null);
-  const [blocked, setBlocked] = useState<BlockedPairingView[] | null>(null);
   const [unowned, setUnowned] = useState<UnownedPairingView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -312,7 +306,6 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
   useEffect(() => {
     if (!target) {
       setPairs(null);
-      setBlocked(null);
       setUnowned(null);
       return;
     }
@@ -322,15 +315,13 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
     setLimit(PAIR_PAGE);
     void (async () => {
       try {
-        const [owned, stuck, lacking] = await Promise.all([
+        const [owned, waiting] = await Promise.all([
           invoke<BreedingPairView[]>("breeding_options", { target }),
-          invoke<BlockedPairingView[]>("blocked_breeding_options", { target }),
           invoke<UnownedPairingView[]>("unowned_breeding_options", { target }),
         ]);
         if (cancelled) return;
         setPairs(owned);
-        setBlocked(stuck);
-        setUnowned(lacking);
+        setUnowned(waiting);
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {
@@ -347,31 +338,27 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
 
   const counts: Record<Pool, number | null> = {
     owned: pairs?.length ?? null,
-    blocked: blocked?.length ?? null,
     unowned: unowned?.length ?? null,
   };
 
   const shownPairs = useMemo(() => pairs?.slice(0, limit) ?? [], [pairs, limit]);
-  const shownBlocked = useMemo(() => blocked?.slice(0, limit) ?? [], [blocked, limit]);
   const shownUnowned = useMemo(() => unowned?.slice(0, limit) ?? [], [unowned, limit]);
 
-  // Distinct species across all three pools, for the same reason as the graded
+  // Distinct species across both pools, for the same reason as the graded
   // table above: paging must not change what artwork is requested.
   const speciesOnScreen = useMemo(
     () => [
       ...new Set([
         ...(pairs ?? []).flatMap((p) => [p.parentA.characterId, p.parentB.characterId]),
-        ...(blocked ?? []).flatMap((p) => [p.parentA.characterId, p.parentB.characterId]),
         ...(unowned ?? []).flatMap((p) => [p.parentA.characterId, p.parentB.characterId]),
       ]),
     ],
-    [pairs, blocked, unowned],
+    [pairs, unowned],
   );
   const icons = useSpeciesIcons(speciesOnScreen);
 
-  const active = { owned: pairs, blocked, unowned }[pool];
-  const shownCount = { owned: shownPairs, blocked: shownBlocked, unowned: shownUnowned }[pool]
-    .length;
+  const active = pool === "owned" ? pairs : unowned;
+  const shownCount = (pool === "owned" ? shownPairs : shownUnowned).length;
 
   return (
     <div className="breeding">
@@ -415,12 +402,9 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
 
       {!busy && active !== null && active.length === 0 && (
         <p className="muted">
-          {pool === "owned" &&
-            "Nothing you own breeds into that species right now — check the other two tabs for what is standing in the way."}
-          {pool === "blocked" &&
-            "No combination is stuck: every pairing you own both species of can be bred today."}
-          {pool === "unowned" &&
-            "No combination reaches that species, even counting parents you don’t own. It is not obtainable by breeding."}
+          {pool === "owned"
+            ? "Nothing you own breeds into that species right now — Unowned parents shows what is standing in the way."
+            : "Nothing left to go and get — every combination for this species is one you can already breed."}
         </p>
       )}
 
@@ -462,53 +446,13 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
         </>
       )}
 
-      {!busy && pool === "blocked" && blocked !== null && blocked.length > 0 && (
-        <>
-          <p className="muted dex-count">
-            {blocked.length === 1
-              ? "1 combination you own is stuck"
-              : `${blocked.length} combinations you own are stuck`}{" "}
-            — showing {shownCount}
-          </p>
-          <ul className="pairs">
-            {shownBlocked.map((pairing) => (
-              <li
-                key={`${pairing.parentA.instanceId}-${pairing.parentB.instanceId}`}
-                className="pair"
-              >
-                <Parent parent={pairing.parentA} icon={icons[pairing.parentA.characterId]} />
-                <span className="pair-plus" aria-hidden="true">
-                  +
-                </span>
-                <Parent parent={pairing.parentB} icon={icons[pairing.parentB.characterId]} />
-                <div className="pair-why">
-                  <span className="pair-blocked">{blockedLabel(pairing)}</span>
-                  <span className="muted">{blockedFix(pairing)}</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-          <ShowMore
-            total={blocked.length}
-            shown={shownCount}
-            onMore={() => setLimit((n) => n + PAIR_PAGE)}
-          />
-          <p className="muted dex-detail-note">
-            You have both species, but not a pair that can share a farm. Gender
-            is read across every Pal you own of each species, not just the best
-            few, so a mate buried at the bottom of the box still counts. The
-            specimens shown are your best of each.
-          </p>
-        </>
-      )}
-
       {!busy && pool === "unowned" && unowned !== null && unowned.length > 0 && (
         <>
           <p className="muted dex-count">
             {unowned.length === 1
-              ? "1 combination needs"
-              : `${unowned.length} combinations need`}{" "}
-            a species you don’t own — showing {shownCount}
+              ? "1 combination is"
+              : `${unowned.length} combinations are`}{" "}
+            waiting on a Pal you don’t have — showing {shownCount}
           </p>
           <ul className="pairs">
             {shownUnowned.map((pairing) => (
@@ -516,16 +460,22 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
                 key={`${pairing.parentA.characterId}-${pairing.parentB.characterId}`}
                 className="pair"
               >
-                <Side side={pairing.parentA} icon={icons[pairing.parentA.characterId]} />
+                <Side
+                  side={pairing.parentA}
+                  icon={icons[pairing.parentA.characterId]}
+                  need={pairing.need}
+                />
                 <span className="pair-plus" aria-hidden="true">
                   +
                 </span>
-                <Side side={pairing.parentB} icon={icons[pairing.parentB.characterId]} />
+                <Side
+                  side={pairing.parentB}
+                  icon={icons[pairing.parentB.characterId]}
+                  need={pairing.need}
+                />
                 <div className="pair-why">
-                  <span className="pair-need">
-                    Need {pairing.missingSpecies.length === 1 ? "1 species" : "2 species"}
-                  </span>
-                  <span className="muted">{pairing.missingSpecies.join(", ")}</span>
+                  <span className="pair-need">{needLabel(pairing)}</span>
+                  <span className="muted">{needDetail(pairing)}</span>
                 </div>
               </li>
             ))}
@@ -536,11 +486,12 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
             onMore={() => setLimit((n) => n + PAIR_PAGE)}
           />
           <p className="muted dex-detail-note">
-            Species combinations, not specific Pals: a species nobody owns has
-            no IVs, gender or passives to rank on. Ordered by how much you’d
-            have to catch first — one new species before two — then by the
-            quality of the parent you already have. Combinations where you own
-            both parents are under Owned pairs.
+            Everything you can’t breed today, and what each one is waiting on.
+            Ordered by how much you’d have to go and get: another of something
+            you own, then the other gender of one you own, then one new species,
+            then two — and within that by the quality of the parent you have.
+            Gender is read across every Pal you own of a species, not just the
+            best few, so a mate at the bottom of the box still counts.
           </p>
         </>
       )}
@@ -565,23 +516,36 @@ function ShowMore({
   );
 }
 
-/** What is standing in the way, in three words. */
-function blockedLabel(pairing: BlockedPairingView): string {
-  if (pairing.reason === "onlySpecimen") return "Only one owned";
-  return pairing.blockingGender === "female" ? "All female" : "All male";
+/** How big the ask is, as a chip. */
+function needLabel(pairing: UnownedPairingView): string {
+  switch (pairing.need) {
+    case "secondSpecimen":
+      return "Need a 2nd";
+    case "oppositeGender":
+      return pairing.blockingGender === "female" ? "Need a male" : "Need a female";
+    case "oneSpecies":
+      return "Need 1 species";
+    case "twoSpecies":
+      return "Need 2 species";
+  }
 }
 
-/** What to do about it. */
-function blockedFix(pairing: BlockedPairingView): string {
-  const species = pairing.parentA.displayName ?? pairing.parentA.characterId;
-  if (pairing.reason === "onlySpecimen") {
-    return `Catch or breed a second ${species} — a Pal can't breed with itself`;
+/** The ask spelled out, next to the chip. */
+function needDetail(pairing: UnownedPairingView): string {
+  const a = pairing.parentA.displayName ?? pairing.parentA.characterId;
+  const b = pairing.parentB.displayName ?? pairing.parentB.characterId;
+  switch (pairing.need) {
+    case "secondSpecimen":
+      return `You own one ${a} — a Pal can’t breed with itself, so you need another`;
+    case "oppositeGender": {
+      const wanted = pairing.blockingGender === "female" ? "male" : "female";
+      return a === b
+        ? `Every ${a} you own is ${pairing.blockingGender} — you need a ${wanted}`
+        : `Both are ${pairing.blockingGender} — you need a ${wanted} ${a} or ${b}`;
+    }
+    default:
+      return pairing.missingSpecies.join(", ");
   }
-  const wanted = pairing.blockingGender === "female" ? "male" : "female";
-  const other = pairing.parentB.displayName ?? pairing.parentB.characterId;
-  return species === other
-    ? `Every ${species} you own is ${pairing.blockingGender} — you need a ${wanted}`
-    : `Need a ${wanted} ${species} or ${other}`;
 }
 
 /**
@@ -589,8 +553,22 @@ function blockedFix(pairing: BlockedPairingView): string {
  * way the owned list does; an unowned one shows the species alone, marked so
  * the two are never mistaken for each other.
  */
-function Side({ side, icon }: { side: PairingSideView; icon?: string }) {
+function Side({
+  side,
+  icon,
+  need,
+}: {
+  side: PairingSideView;
+  icon?: string;
+  need: PairingNeed;
+}) {
   if (side.owned) return <Parent parent={side.owned} icon={icon} />;
+  // For a second-specimen need the empty slot is a species you *do* own, so
+  // "not owned" would be plainly wrong — what's missing is another one.
+  const sub =
+    need === "secondSpecimen"
+      ? "need a second"
+      : `${side.dexLabel ? `No.${side.dexLabel} · ` : ""}not owned`;
   return (
     <div className="pair-parent pair-parent-missing">
       {icon ? (
@@ -602,9 +580,7 @@ function Side({ side, icon }: { side: PairingSideView; icon?: string }) {
         <span className="species" title={side.characterId}>
           {side.displayName ?? side.characterId}
         </span>
-        <span className="muted">
-          {side.dexLabel ? `No.${side.dexLabel} · ` : ""}not owned
-        </span>
+        <span className="muted">{sub}</span>
       </div>
     </div>
   );
