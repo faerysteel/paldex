@@ -121,6 +121,16 @@ impl BreedingIndex {
         if tribe.is_empty() || rank == 0 || rank >= RANK_SENTINEL {
             return;
         }
+        // `IgnoreCombi` is the game's own "this one does not breed" flag, and
+        // a non-Pal cannot enter a farm either. Such a row is not a parent at
+        // all, so it is kept out of `parents` entirely rather than merely out
+        // of the candidate pool: leaving it in made `child_of` answer for
+        // Panthalus and Astralym, and the answer was nearest-rank noise — a
+        // species the pair cannot actually produce. Callers read a `Some` as
+        // "this pairing works", so the only honest reply here is `None`.
+        if !is_pal || ignore_combi {
+            return;
+        }
         self.parents.insert(
             key.to_owned(),
             Parent {
@@ -128,10 +138,6 @@ impl BreedingIndex {
                 rank,
             },
         );
-
-        if !is_pal || ignore_combi {
-            return;
-        }
         // One candidate per tribe. The canonical member is the row named after
         // the tribe; a Paldeck number breaks any remaining tie. Without this,
         // quest duplicates (`Quest_Farmer03_SheepBall`) and unique-combo-only
@@ -253,7 +259,8 @@ mod tests {
         add(&mut b, "c", "C", "TribeC", 120, false, 30);
         // A quest duplicate of TribeA must not enter the pool.
         add(&mut b, "quest_a", "Quest_A", "TribeA", 100, false, 0);
-        // Excluded from being a child, but still usable as a parent.
+        // `IgnoreCombi`: the game does not breed this one at all — neither a
+        // parent nor a possible child.
         add(&mut b, "x", "X", "TribeX", 130, true, 40);
         b.finish();
         b
@@ -302,12 +309,44 @@ mod tests {
         assert_eq!(b.child_of("b", "a"), Some("SpecialChild"));
     }
 
-    /// A species the generic rule never produces can still be a parent.
+    /// An `IgnoreCombi` species does not breed at all.
+    ///
+    /// It is neither a candidate child nor a usable parent, so every lookup
+    /// naming it answers `None`. Answering with the nearest rank instead would
+    /// read as a working pairing — the caller cannot tell a real result from a
+    /// fallback — and the four species this covers in the shipped data
+    /// (Panthalus, Astralym and the two Yakushima raid bosses) genuinely
+    /// cannot be put in a farm.
     #[test]
-    fn an_ignored_species_still_breeds() {
+    fn an_ignored_species_does_not_breed_at_all() {
         let b = index();
-        assert!(b.child_of("x", "x").is_some());
-        assert!(b.pool.iter().all(|c| c.character_id != "X"));
+        assert_eq!(b.child_of("x", "x"), None, "not a parent");
+        assert_eq!(b.child_of("x", "a"), None, "not a parent alongside anything else");
+        assert_eq!(b.child_of("a", "x"), None, "either way round");
+        assert!(
+            b.pool.iter().all(|c| c.character_id != "X"),
+            "and never a child"
+        );
+    }
+
+    /// A species merely *shadowed* by its tribe's representative is different:
+    /// nothing breeds into it, but it breeds perfectly well itself.
+    ///
+    /// `Quest_A` stands in for the real `PlantSlime_Flower`, whose pairings
+    /// yield the base species. That is why "cannot be bred into" and "cannot
+    /// breed" have to be judged separately.
+    #[test]
+    fn a_shadowed_species_is_still_a_parent() {
+        let b = index();
+        assert_eq!(
+            b.child_of("quest_a", "quest_a"),
+            Some("A"),
+            "it breeds, and a pair of them gives the species it shadows"
+        );
+        assert!(
+            b.pool.iter().all(|c| c.character_id != "Quest_A"),
+            "but nothing produces it"
+        );
     }
 
     #[test]

@@ -899,6 +899,55 @@ fn parent_view(
     }
 }
 
+/// Species the breeding search can actually be asked for — every species that
+/// some pairing produces.
+///
+/// The Paldeck is the wrong list for this picker. It includes species nothing
+/// breeds into: the four the game bars from breeding entirely (Panthalus,
+/// Astralym and the two Yakushima raid bosses), and variant forms like
+/// `PlantSlime_Flower` that are shadowed by their base species — a pair of
+/// them yields Gumoss, so nothing produces the variant itself. Offering those
+/// as targets promises a result that cannot exist.
+///
+/// # Errors
+///
+/// A display-ready message if the reference data is unavailable — an empty
+/// list is returned instead, since without a pak there is no breeding table.
+#[tauri::command(async)]
+pub fn breeding_targets(state: State<AppState>) -> Vec<queries::BreedingTargetView> {
+    let Some(reference) = state.reference() else {
+        eprintln!("[paldex] breeding_targets: no reference data (no pak found)");
+        return Vec::new();
+    };
+
+    // A species is producible exactly when it is its own self-breeding result
+    // — proven equivalent to pairing everything with everything in
+    // `paldex-data`'s `self_breeding_identifies_exactly_the_producible_species`,
+    // which is why this can be a single lookup per species rather than a scan.
+    let mut targets: Vec<queries::BreedingTargetView> = reference
+        .species_iter()
+        .filter(|s| {
+            reference
+                .breeding_result(&s.character_id, &s.character_id)
+                .is_some_and(|child| child.eq_ignore_ascii_case(&s.character_id))
+        })
+        .map(|s| queries::BreedingTargetView {
+            character_id: s.character_id.clone(),
+            display_name: s.display_name.clone(),
+            dex_label: s.dex_label(),
+        })
+        .collect();
+
+    // Paldeck order, with anything unnumbered last by name — the same ordering
+    // the dex grid uses, so the picker reads like the in-game Paldeck.
+    targets.sort_by(|a, b| {
+        (a.dex_label.is_none(), &a.dex_label, &a.display_name)
+            .cmp(&(b.dex_label.is_none(), &b.dex_label, &b.display_name))
+    });
+    eprintln!("[paldex] breeding_targets: {} producible species", targets.len());
+    targets
+}
+
 /// Pairings for `target` that need at least one species the player does not
 /// own — the "unowned parents" list behind [`breeding_options`]'s sibling tab.
 ///
@@ -1542,6 +1591,72 @@ mod tests {
         eprintln!("{child}: {} pairs, all distinct species combinations", pairs.len());
     }
 
+    /// The target picker must only offer species breeding can actually produce.
+    ///
+    /// Two kinds have to be absent: the ones the game bars from breeding, and
+    /// variant forms shadowed by their base species. Both would otherwise sit
+    /// in the list promising a result that no pairing can deliver.
+    #[test]
+    fn the_target_picker_offers_only_producible_species() {
+        let Some(loaded) = load_reference() else {
+            eprintln!("skipping: need the game pak");
+            return;
+        };
+        let index = &loaded.index;
+
+        let targets: std::collections::HashSet<String> = index
+            .species_iter()
+            .filter(|s| {
+                index
+                    .breeding_result(&s.character_id, &s.character_id)
+                    .is_some_and(|c| c.eq_ignore_ascii_case(&s.character_id))
+            })
+            .map(|s| s.character_id.to_ascii_lowercase())
+            .collect();
+        eprintln!("{} producible species offered as targets", targets.len());
+        assert!(targets.len() > 200, "most species should be breedable into");
+
+        // Barred from breeding entirely — neither parent nor child.
+        for id in [
+            "KingWhale",                   // Panthalus
+            "WorldTreeDragon",             // Astralym
+            "RAID_YakushimaBoss001_Green", // True Eye of Cthulhu
+            "RAID_YakushimaBoss002",       // Moon Lord
+        ] {
+            assert!(
+                !targets.contains(&id.to_ascii_lowercase()),
+                "{id} cannot be bred, so it must not be offered as a target"
+            );
+        }
+
+        // Breedable as a parent, but nothing produces them: a pair of these
+        // yields the base species they are shadowed by. This is the case that
+        // must *not* be lumped in with the barred ones — they still breed.
+        for (id, base) in [
+            ("PlantSlime_Flower", "PlantSlime"),
+            ("Quest_Farmer03_SheepBall", "SheepBall"),
+            ("Quest_Farmer03_PinkCat", "PinkCat"),
+        ] {
+            assert!(
+                !targets.contains(&id.to_ascii_lowercase()),
+                "{id} is never produced by breeding, so it must not be a target"
+            );
+            assert_eq!(
+                index.breeding_result(id, id).map(str::to_ascii_lowercase),
+                Some(base.to_ascii_lowercase()),
+                "{id} + {id} should give {base}, which is what makes it unproducible"
+            );
+        }
+
+        // The everyday case must survive the filter.
+        for id in ["SheepBall", "ChickenPal", "Anubis", "PinkCat"] {
+            assert!(
+                targets.contains(&id.to_ascii_lowercase()),
+                "{id} is breedable and must still be offered"
+            );
+        }
+    }
+
     /// Every owned species must be a candidate parent in the acquisition list,
     /// whether or not it carries a Paldeck number.
     ///
@@ -1824,16 +1939,38 @@ mod tests {
         }
         eprintln!("fixture: {} breeding targets, {pair_total} pairs total", targets.len());
 
-        // The unowned-parents tab. Its universe is the Paldeck rather than the
-        // roster, so it answers for targets the owned list cannot reach at all
-        // — which is the whole reason the tab exists, and means it needs its
-        // own target list rather than reusing the one above.
-        let unowned_targets: Vec<String> = loaded
+        // The unowned-parents tab. Its universe is every species the picker can
+        // offer rather than the roster, so it answers for targets the owned
+        // list cannot reach at all — the whole reason the tab exists.
+        // Same filter as `breeding_targets`, which cannot be called here
+        // because it needs Tauri state the test has no way to build.
+        let producible: Vec<&paldex_data::Species> = loaded
             .index
             .species_iter()
-            .filter(|s| s.dex_number.is_some())
-            .map(|s| s.character_id.clone())
+            .filter(|s| {
+                loaded
+                    .index
+                    .breeding_result(&s.character_id, &s.character_id)
+                    .is_some_and(|c| c.eq_ignore_ascii_case(&s.character_id))
+            })
             .collect();
+        let mut picker: Vec<queries::BreedingTargetView> = producible
+            .iter()
+            .map(|s| queries::BreedingTargetView {
+                character_id: s.character_id.clone(),
+                display_name: s.display_name.clone(),
+                dex_label: s.dex_label(),
+            })
+            .collect();
+        picker.sort_by(|a, b| {
+            (a.dex_label.is_none(), &a.dex_label, &a.display_name)
+                .cmp(&(b.dex_label.is_none(), &b.dex_label, &b.display_name))
+        });
+        eprintln!("fixture: {} producible targets in the picker", picker.len());
+        write("breeding_targets", serde_json::to_value(&picker).unwrap());
+
+        let unowned_targets: Vec<String> =
+            producible.iter().map(|s| s.character_id.clone()).collect();
         let mut unowned_total = 0usize;
         let mut unowned_files = 0usize;
         for target in &unowned_targets {

@@ -84,25 +84,99 @@ fn self_breeding_is_a_fixed_point_for_every_species() {
         "expected most species to be breedable, got {checked}"
     );
 
-    // The only species that break it are ones the game will not let into a
-    // breeding farm at all — raid bosses and the tower boss. They carry
-    // `IgnoreCombi`, so they are excluded from the candidate pool and the
-    // generic rule falls through to whatever rank is nearest. Naming them
-    // keeps this exact: a fifth exception is a real regression.
-    let mut broke: Vec<String> = failures
-        .iter()
-        .map(|f| f.split(' ').next().unwrap_or_default().to_owned())
+    // No exceptions. The four that used to break it — Panthalus, Astralym and
+    // the two Yakushima raid bosses — carry `IgnoreCombi` and are now kept out
+    // of the parent table entirely, so they answer `None` rather than a
+    // nearest-rank guess. Any failure here is a real regression.
+    assert!(
+        failures.is_empty(),
+        "self-breeding must be a fixed point for every breedable species: {failures:?}"
+    );
+}
+
+/// The species the game bars from breeding must answer `None`, not a guess.
+///
+/// They carry `IgnoreCombi` and cannot enter a farm, so they are neither a
+/// parent nor a possible child. Leaving them in the parent table made
+/// `breeding_result` return whatever rank happened to be nearest — Aegidron
+/// for Panthalus, Chikipi for the raid bosses — which reads as a working
+/// pairing and is not one.
+#[test]
+fn species_barred_from_breeding_are_not_parents() {
+    let index = index!();
+
+    for id in [
+        "KingWhale",                   // Panthalus
+        "WorldTreeDragon",             // Astralym
+        "RAID_YakushimaBoss001_Green", // True Eye of Cthulhu
+        "RAID_YakushimaBoss002",       // Moon Lord
+    ] {
+        assert_eq!(
+            index.breeding_result(id, id),
+            None,
+            "{id} cannot breed, so it must not answer as a parent"
+        );
+        assert_eq!(
+            index.breeding_result(id, "SheepBall"),
+            None,
+            "{id} must not answer as a parent alongside anything else either"
+        );
+        assert_eq!(index.breeding_result("SheepBall", id), None, "{id}, either way round");
+    }
+}
+
+/// A species is breedable-into exactly when it is its own self-breeding
+/// result, which is the cheap test the app filters its target picker with.
+///
+/// Verified here against an exhaustive scan so the app can rely on the O(1)
+/// form instead of pairing every species with every other on each request.
+#[test]
+fn self_breeding_identifies_exactly_the_producible_species() {
+    let index = index!();
+
+    let species: Vec<&str> = index
+        .species_iter()
+        .map(|s| s.character_id.as_str())
         .collect();
-    broke.sort();
+
+    let cheap: std::collections::BTreeSet<String> = species
+        .iter()
+        .filter(|id| index.breeding_result(id, id).is_some_and(|c| c.eq_ignore_ascii_case(id)))
+        .map(|id| id.to_ascii_lowercase())
+        .collect();
+
+    // Every child any pair can actually produce, canonicalized the way the app
+    // does. One unique combo names an alpha form (`BOSS_MimicDog`) as its
+    // child; that is Mimog with a `BOSS_` prefix, and the save strips the
+    // prefix too, so comparing raw ids would report a species the player would
+    // never see as distinct.
+    let canonical = |id: &str| {
+        index
+            .species(id)
+            .map_or_else(|| id.to_ascii_lowercase(), |s| s.character_id.to_ascii_lowercase())
+    };
+    let mut exhaustive: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (i, a) in species.iter().enumerate() {
+        for b in &species[i..] {
+            if let Some(child) = index.breeding_result(a, b) {
+                exhaustive.insert(canonical(child));
+            }
+        }
+    }
+
+    eprintln!(
+        "{} species producible by the cheap test, {} by exhaustive pairing",
+        cheap.len(),
+        exhaustive.len()
+    );
+    assert!(cheap.len() > 200, "most species should be breedable into");
+    let only_exhaustive: Vec<&String> = exhaustive.difference(&cheap).collect();
+    let only_cheap: Vec<&String> = cheap.difference(&exhaustive).collect();
+    eprintln!("producible but not a fixed point: {only_exhaustive:?}");
+    eprintln!("a fixed point but never produced: {only_cheap:?}");
     assert_eq!(
-        broke,
-        [
-            "KingWhale",
-            "RAID_YakushimaBoss001_Green",
-            "RAID_YakushimaBoss002",
-            "WorldTreeDragon",
-        ],
-        "unexpected self-breeding failures: {failures:?}"
+        cheap, exhaustive,
+        "the self-breeding test must agree with pairing everything with everything"
     );
 }
 

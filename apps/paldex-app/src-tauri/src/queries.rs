@@ -219,6 +219,17 @@ pub struct BreedingParentView {
     pub iv_defense: i64,
 }
 
+/// A species the breeding picker may offer as a target.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreedingTargetView {
+    pub character_id: String,
+    pub display_name: String,
+    /// Paldeck number as the game shows it, or `None` for a producible species
+    /// with no Paldeck entry.
+    pub dex_label: Option<String>,
+}
+
 /// One side of a pairing that involves a species the player does not own.
 ///
 /// `owned` is the best specimen when this species is in the roster, and `None`

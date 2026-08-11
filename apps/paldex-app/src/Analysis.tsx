@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   BreedingPairView,
   BreedingParentView,
-  DexProgressView,
+  BreedingTargetView,
   GradedPalView,
   IvTier,
   PairingNeed,
@@ -283,16 +283,17 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
   const [busy, setBusy] = useState(false);
   const [limit, setLimit] = useState(PAIR_PAGE);
 
-  // The species list is the Paldeck, not the roster — the whole point is to
-  // ask for something you do not have yet.
+  // Only species breeding can actually produce — not the whole Paldeck. The
+  // backend filters out the ones the game will not breed and the variant forms
+  // nothing yields, so the picker never promises a result that cannot exist.
   useEffect(() => {
     void (async () => {
       try {
-        const dex = await invoke<DexProgressView>("dex_progress");
+        const producible = await invoke<BreedingTargetView[]>("breeding_targets");
         setTargets(
-          dex.entries.map((e) => ({
-            id: e.characterId,
-            label: e.dexLabel ? `No.${e.dexLabel} ${e.displayName}` : e.displayName,
+          producible.map((t) => ({
+            id: t.characterId,
+            label: t.dexLabel ? `No.${t.dexLabel} ${t.displayName}` : t.displayName,
           })),
         );
       } catch (e) {

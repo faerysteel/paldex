@@ -207,6 +207,14 @@ export interface PairingSideView {
   owned: BreedingParentView | null;
 }
 
+/** A species the breeding picker may be asked for — one breeding can produce. */
+export interface BreedingTargetView {
+  characterId: string;
+  displayName: string;
+  /** Paldeck number as the game shows it, or null for a species with none. */
+  dexLabel: string | null;
+}
+
 /**
  * What a pairing is waiting on, smallest ask first. Every one of these is a
  * Pal you don't currently have — a female Lamball you don't own is as much an
