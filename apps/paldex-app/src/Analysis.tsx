@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  BlockedPairingView,
   BreedingPairView,
   BreedingParentView,
   DexProgressView,
@@ -244,13 +245,18 @@ export default function Analysis({ summary }: Props) {
 }
 
 /** Which parent pool the breeding results are drawn from. */
-type Pool = "owned" | "unowned";
+type Pool = "owned" | "blocked" | "unowned";
 
 const POOLS: { id: Pool; label: string; hint: string }[] = [
   {
     id: "owned",
     label: "Owned pairs",
-    hint: "Both parents are Pals in this world",
+    hint: "Both parents are Pals in this world, and you can breed them now",
+  },
+  {
+    id: "blocked",
+    label: "Blocked",
+    hint: "You own both species but can't fill a farm with them",
   },
   {
     id: "unowned",
@@ -277,6 +283,7 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
   const [target, setTarget] = useState("");
   const [pool, setPool] = useState<Pool>("owned");
   const [pairs, setPairs] = useState<BreedingPairView[] | null>(null);
+  const [blocked, setBlocked] = useState<BlockedPairingView[] | null>(null);
   const [unowned, setUnowned] = useState<UnownedPairingView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -305,6 +312,7 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
   useEffect(() => {
     if (!target) {
       setPairs(null);
+      setBlocked(null);
       setUnowned(null);
       return;
     }
@@ -314,12 +322,14 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
     setLimit(PAIR_PAGE);
     void (async () => {
       try {
-        const [owned, lacking] = await Promise.all([
+        const [owned, stuck, lacking] = await Promise.all([
           invoke<BreedingPairView[]>("breeding_options", { target }),
+          invoke<BlockedPairingView[]>("blocked_breeding_options", { target }),
           invoke<UnownedPairingView[]>("unowned_breeding_options", { target }),
         ]);
         if (cancelled) return;
         setPairs(owned);
+        setBlocked(stuck);
         setUnowned(lacking);
       } catch (e) {
         if (!cancelled) setError(String(e));
@@ -337,27 +347,31 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
 
   const counts: Record<Pool, number | null> = {
     owned: pairs?.length ?? null,
+    blocked: blocked?.length ?? null,
     unowned: unowned?.length ?? null,
   };
 
   const shownPairs = useMemo(() => pairs?.slice(0, limit) ?? [], [pairs, limit]);
+  const shownBlocked = useMemo(() => blocked?.slice(0, limit) ?? [], [blocked, limit]);
   const shownUnowned = useMemo(() => unowned?.slice(0, limit) ?? [], [unowned, limit]);
 
-  // Distinct species across both pools, for the same reason as the graded
+  // Distinct species across all three pools, for the same reason as the graded
   // table above: paging must not change what artwork is requested.
   const speciesOnScreen = useMemo(
     () => [
       ...new Set([
         ...(pairs ?? []).flatMap((p) => [p.parentA.characterId, p.parentB.characterId]),
+        ...(blocked ?? []).flatMap((p) => [p.parentA.characterId, p.parentB.characterId]),
         ...(unowned ?? []).flatMap((p) => [p.parentA.characterId, p.parentB.characterId]),
       ]),
     ],
-    [pairs, unowned],
+    [pairs, blocked, unowned],
   );
   const icons = useSpeciesIcons(speciesOnScreen);
 
-  const active = pool === "owned" ? pairs : unowned;
-  const shownCount = pool === "owned" ? shownPairs.length : shownUnowned.length;
+  const active = { owned: pairs, blocked, unowned }[pool];
+  const shownCount = { owned: shownPairs, blocked: shownBlocked, unowned: shownUnowned }[pool]
+    .length;
 
   return (
     <div className="breeding">
@@ -401,9 +415,12 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
 
       {!busy && active !== null && active.length === 0 && (
         <p className="muted">
-          {pool === "owned"
-            ? "Nothing you own breeds into that species — try Unowned parents for what you would have to catch first."
-            : "No combination reaches that species, even counting parents you don’t own. It is not obtainable by breeding."}
+          {pool === "owned" &&
+            "Nothing you own breeds into that species right now — check the other two tabs for what is standing in the way."}
+          {pool === "blocked" &&
+            "No combination is stuck: every pairing you own both species of can be bred today."}
+          {pool === "unowned" &&
+            "No combination reaches that species, even counting parents you don’t own. It is not obtainable by breeding."}
         </p>
       )}
 
@@ -441,6 +458,46 @@ function Breeding({ summary }: { summary: SnapshotSummaryView }) {
             of each. Ranked by the parents’ average IVs plus the passives the
             child could inherit — a child takes at most four, so a larger pool
             stops helping past that.
+          </p>
+        </>
+      )}
+
+      {!busy && pool === "blocked" && blocked !== null && blocked.length > 0 && (
+        <>
+          <p className="muted dex-count">
+            {blocked.length === 1
+              ? "1 combination you own is stuck"
+              : `${blocked.length} combinations you own are stuck`}{" "}
+            — showing {shownCount}
+          </p>
+          <ul className="pairs">
+            {shownBlocked.map((pairing) => (
+              <li
+                key={`${pairing.parentA.instanceId}-${pairing.parentB.instanceId}`}
+                className="pair"
+              >
+                <Parent parent={pairing.parentA} icon={icons[pairing.parentA.characterId]} />
+                <span className="pair-plus" aria-hidden="true">
+                  +
+                </span>
+                <Parent parent={pairing.parentB} icon={icons[pairing.parentB.characterId]} />
+                <div className="pair-why">
+                  <span className="pair-blocked">{blockedLabel(pairing)}</span>
+                  <span className="muted">{blockedFix(pairing)}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <ShowMore
+            total={blocked.length}
+            shown={shownCount}
+            onMore={() => setLimit((n) => n + PAIR_PAGE)}
+          />
+          <p className="muted dex-detail-note">
+            You have both species, but not a pair that can share a farm. Gender
+            is read across every Pal you own of each species, not just the best
+            few, so a mate buried at the bottom of the box still counts. The
+            specimens shown are your best of each.
           </p>
         </>
       )}
@@ -506,6 +563,25 @@ function ShowMore({
       Show {Math.min(PAIR_PAGE, total - shown)} more
     </button>
   );
+}
+
+/** What is standing in the way, in three words. */
+function blockedLabel(pairing: BlockedPairingView): string {
+  if (pairing.reason === "onlySpecimen") return "Only one owned";
+  return pairing.blockingGender === "female" ? "All female" : "All male";
+}
+
+/** What to do about it. */
+function blockedFix(pairing: BlockedPairingView): string {
+  const species = pairing.parentA.displayName ?? pairing.parentA.characterId;
+  if (pairing.reason === "onlySpecimen") {
+    return `Catch or breed a second ${species} — a Pal can't breed with itself`;
+  }
+  const wanted = pairing.blockingGender === "female" ? "male" : "female";
+  const other = pairing.parentB.displayName ?? pairing.parentB.characterId;
+  return species === other
+    ? `Every ${species} you own is ${pairing.blockingGender} — you need a ${wanted}`
+    : `Need a ${wanted} ${species} or ${other}`;
 }
 
 /**

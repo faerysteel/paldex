@@ -54,7 +54,7 @@ pub struct SoulUpgrades {
     pub craft_speed: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Gender {
     Male,
     Female,

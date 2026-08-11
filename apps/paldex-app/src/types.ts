@@ -207,6 +207,22 @@ export interface PairingSideView {
   owned: BreedingParentView | null;
 }
 
+/**
+ * Why a combination whose species you both own still can't be bred.
+ * `sameGender` — every candidate shares one gender; `onlySpecimen` — it pairs
+ * a species with itself and you own exactly one.
+ */
+export type BlockedReason = "sameGender" | "onlySpecimen";
+
+/** A combination you own both species of but still cannot breed. */
+export interface BlockedPairingView {
+  parentA: BreedingParentView;
+  parentB: BreedingParentView;
+  reason: BlockedReason;
+  /** The gender every candidate shares, or null when that isn't the blocker. */
+  blockingGender: "male" | "female" | null;
+}
+
 /** A pairing needing at least one species you don't own. */
 export interface UnownedPairingView {
   parentA: PairingSideView;

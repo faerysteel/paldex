@@ -24,6 +24,7 @@ pub fn run() {
             commands::pal_quality,
             commands::breeding_options,
             commands::unowned_breeding_options,
+            commands::blocked_breeding_options,
             commands::reference_status,
             commands::pal_icons,
         ])

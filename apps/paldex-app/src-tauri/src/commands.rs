@@ -899,6 +899,60 @@ fn parent_view(
     }
 }
 
+/// Combinations for `target` whose species are both owned but which still
+/// cannot be bred — the "blocked" list, so a combination the player has the
+/// species for never silently vanishes from every tab.
+///
+/// # Errors
+///
+/// A display-ready message if no world is selected, or the query fails.
+#[tauri::command(async)]
+pub fn blocked_breeding_options(
+    app: AppHandle,
+    state: State<AppState>,
+    target: String,
+) -> Result<Vec<queries::BlockedPairingView>, String> {
+    let (views, pals) = analysis_roster(&app, &state)?;
+    let Some(reference) = state.reference() else {
+        eprintln!("[paldex] blocked_breeding_options: no reference data (no pak found)");
+        return Ok(Vec::new());
+    };
+    Ok(blocked_view(&views, &pals, &target, reference))
+}
+
+/// The blocked-combination search, split from the command for the same reason
+/// as [`quality_view`].
+fn blocked_view(
+    views: &[PalView],
+    pals: &[paldex_model::Pal],
+    target: &str,
+    reference: &ReferenceIndex,
+) -> Vec<queries::BlockedPairingView> {
+    let blocked = paldex_model::blocked_pairings(pals, target, |a, b| {
+        reference.breeding_result(a, b).map(str::to_owned)
+    });
+
+    let by_id = roster_by_id(views);
+    eprintln!(
+        "[paldex] blocked_breeding_options: {} blocked for {target}",
+        blocked.len()
+    );
+    blocked
+        .into_iter()
+        .map(|b| queries::BlockedPairingView {
+            parent_a: parent_view(b.best_a, &by_id),
+            parent_b: parent_view(b.best_b, &by_id),
+            reason: match b.reason {
+                paldex_model::BlockedReason::SameGender => "sameGender".to_owned(),
+                paldex_model::BlockedReason::OnlySpecimen => "onlySpecimen".to_owned(),
+            },
+            // Lowercased to match the gender strings the rest of the app uses,
+            // which come from the store rather than the enum's own name.
+            blocking_gender: b.blocking_gender.map(|g| format!("{g:?}").to_ascii_lowercase()),
+        })
+        .collect()
+}
+
 /// Pairings for `target` that need at least one species the player does not
 /// own — the "unowned parents" list behind [`breeding_options`]'s sibling tab.
 ///
@@ -1374,6 +1428,211 @@ mod tests {
         );
     }
 
+    /// Against the real save: the three lists partition the combinations that
+    /// produce a target. Every combination of owned species is breedable now
+    /// or blocked; every one involving a species the roster lacks is in the
+    /// unowned list; and none appears twice.
+    ///
+    /// This is what stops a combination quietly vanishing from the UI, which
+    /// is exactly what blocked pairings did before they had a list of their
+    /// own.
+    #[test]
+    fn the_three_breeding_lists_partition_every_combination() {
+        let Some((views, pals, loaded)) = real_analysis_roster() else {
+            eprintln!("skipping: need both a real save and the game pak");
+            return;
+        };
+        let index = &loaded.index;
+
+        // Case-folded, because the save spells one species several ways
+        // (`GhostAnglerFish` / `GhostAnglerfish`) and the analysis layer folds
+        // them into one group. Counting the raw ids would expect combinations
+        // that are really the same one twice over.
+        let mut owned_species: Vec<String> =
+            pals.iter().map(|p| p.character_id.to_ascii_lowercase()).collect();
+        owned_species.sort_unstable();
+        owned_species.dedup();
+
+        let key = |a: &str, b: &str| {
+            let mut pair = [a.to_ascii_lowercase(), b.to_ascii_lowercase()];
+            pair.sort();
+            pair
+        };
+
+        // Targets with a bit of everything, rather than the first few.
+        let mut reachable: Vec<String> = owned_species
+            .iter()
+            .enumerate()
+            .flat_map(|(i, a)| {
+                owned_species[i..]
+                    .iter()
+                    .filter_map(|b| index.breeding_result(a, b).map(str::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        reachable.sort();
+        reachable.dedup();
+        let sample: Vec<&String> = reachable.iter().step_by(reachable.len() / 6).take(6).collect();
+
+        for target in sample {
+            let breedable: Vec<_> = breeding_view(&views, &pals, target, index)
+                .iter()
+                .map(|p| key(&p.parent_a.character_id, &p.parent_b.character_id))
+                .collect();
+            let blocked: Vec<_> = blocked_view(&views, &pals, target, index)
+                .iter()
+                .map(|p| key(&p.parent_a.character_id, &p.parent_b.character_id))
+                .collect();
+
+            let breedable_set: std::collections::HashSet<_> = breedable.iter().collect();
+            let blocked_set: std::collections::HashSet<_> = blocked.iter().collect();
+
+            // Every owned-species combination producing the target must be in
+            // exactly one of the two owned lists.
+            let mut expected = 0usize;
+            for (i, a) in owned_species.iter().enumerate() {
+                for b in &owned_species[i..] {
+                    if index.breeding_result(a, b).is_some_and(|c| c.eq_ignore_ascii_case(target)) {
+                        expected += 1;
+                        let k = key(a, b);
+                        assert!(
+                            breedable_set.contains(&k) || blocked_set.contains(&k),
+                            "{target}: {a} + {b} is in neither the breedable nor the blocked list"
+                        );
+                        assert!(
+                            !(breedable_set.contains(&k) && blocked_set.contains(&k)),
+                            "{target}: {a} + {b} is in both lists"
+                        );
+                    }
+                }
+            }
+
+            eprintln!(
+                "{target}: {expected} owned combinations = {} breedable + {} blocked",
+                breedable.len(),
+                blocked.len()
+            );
+            assert_eq!(
+                breedable.len() + blocked.len(),
+                expected,
+                "{target}: the two owned lists must cover every owned combination exactly once"
+            );
+        }
+    }
+
+    /// The save spells some species more than one way, and the analysis layer
+    /// has to treat those as one species.
+    ///
+    /// This world holds `GhostAnglerFish` *and* `GhostAnglerfish`, plus
+    /// `SheepBall` and `Sheepball`. Grouping on the exact string offered the
+    /// same combination twice and, worse, reported pairings as gender-blocked
+    /// while the mate sat under the other spelling.
+    #[test]
+    fn species_spelled_two_ways_are_treated_as_one() {
+        let Some((views, pals, loaded)) = real_analysis_roster() else {
+            eprintln!("skipping: need both a real save and the game pak");
+            return;
+        };
+
+        let mut by_lower: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
+        for p in &pals {
+            by_lower
+                .entry(p.character_id.to_ascii_lowercase())
+                .or_default()
+                .insert(p.character_id.clone());
+        }
+        let variants: Vec<_> = by_lower.values().filter(|s| s.len() > 1).collect();
+        eprintln!("species ids differing only by case: {variants:?}");
+        assert!(
+            !variants.is_empty(),
+            "this world is known to spell species inconsistently; without that \
+             the rest of this test proves nothing"
+        );
+
+        // No target may offer the same species combination twice.
+        let target = variants[0].iter().next().expect("a variant species");
+        let child = loaded
+            .index
+            .breeding_result(target, target)
+            .expect("a breedable species")
+            .to_owned();
+        let pairs = breeding_view(&views, &pals, &child, &loaded.index);
+
+        let mut seen = std::collections::HashSet::new();
+        for p in &pairs {
+            let mut k = [
+                p.parent_a.character_id.to_ascii_lowercase(),
+                p.parent_b.character_id.to_ascii_lowercase(),
+            ];
+            k.sort();
+            assert!(
+                seen.insert(k.clone()),
+                "{child}: {k:?} offered twice — case variants were not folded"
+            );
+        }
+        eprintln!("{child}: {} pairs, all distinct species combinations", pairs.len());
+    }
+
+    /// A blocked combination must be genuinely blocked — the roster really
+    /// must hold no breedable pair of those two species.
+    #[test]
+    fn blocked_combinations_really_have_no_usable_pair() {
+        let Some((views, pals, loaded)) = real_analysis_roster() else {
+            eprintln!("skipping: need both a real save and the game pak");
+            return;
+        };
+        let index = &loaded.index;
+
+        let mut checked = 0usize;
+        for target in index
+            .species_iter()
+            .filter(|s| s.dex_number.is_some())
+            .map(|s| s.character_id.clone())
+        {
+            for blocked in blocked_view(&views, &pals, &target, index) {
+                checked += 1;
+                let (a, b) = (&blocked.parent_a.character_id, &blocked.parent_b.character_id);
+
+                // Every owned individual of each side, not a sample.
+                let side = |id: &String| {
+                    pals.iter()
+                        .filter(|p| p.character_id.eq_ignore_ascii_case(id))
+                        .collect::<Vec<_>>()
+                };
+                let (side_a, side_b) = (side(a), side(b));
+                assert!(!side_a.is_empty() && !side_b.is_empty(), "both species must be owned");
+
+                let usable = side_a.iter().any(|x| {
+                    side_b.iter().any(|y| {
+                        x.instance_id != y.instance_id
+                            && !matches!(
+                                (x.gender, y.gender),
+                                (paldex_model::Gender::Male, paldex_model::Gender::Male)
+                                    | (paldex_model::Gender::Female, paldex_model::Gender::Female)
+                            )
+                    })
+                });
+                assert!(
+                    !usable,
+                    "{target}: {a} + {b} was reported blocked but a usable pair exists"
+                );
+
+                match blocked.reason.as_str() {
+                    "onlySpecimen" => assert!(
+                        a.eq_ignore_ascii_case(b) && side_a.len() < 2,
+                        "{a} + {b}: onlySpecimen must mean one Pal of one species"
+                    ),
+                    "sameGender" => assert!(
+                        blocked.blocking_gender.is_some(),
+                        "{a} + {b}: sameGender must name the gender"
+                    ),
+                    other => panic!("unexpected reason {other}"),
+                }
+            }
+        }
+        eprintln!("{checked} blocked combinations verified against the full roster");
+    }
+
     /// Picking a different species must actually change the answer.
     ///
     /// The per-pair assertions in the test above would all still pass if the
@@ -1563,6 +1822,22 @@ mod tests {
             );
         }
         eprintln!("fixture: {unowned_files} unowned targets, {unowned_total} pairings total");
+
+        let mut blocked_total = 0usize;
+        let mut blocked_files = 0usize;
+        for target in &unowned_targets {
+            let blocked = blocked_view(&views, &pals, target, &loaded.index);
+            if blocked.is_empty() {
+                continue;
+            }
+            blocked_total += blocked.len();
+            blocked_files += 1;
+            write(
+                &format!("blocked_breeding_options__{target}"),
+                serde_json::to_value(&blocked).unwrap(),
+            );
+        }
+        eprintln!("fixture: {blocked_files} blocked targets, {blocked_total} combinations total");
         if let Some((dex, players, summary)) = &derived {
             write("dex_progress", serde_json::to_value(dex).unwrap());
             write("player_progress", serde_json::to_value(players).unwrap());
@@ -1660,3 +1935,4 @@ mod tests {
         );
     }
 }
+

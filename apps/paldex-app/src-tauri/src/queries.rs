@@ -235,6 +235,19 @@ pub struct PairingSideView {
     pub owned: Option<BreedingParentView>,
 }
 
+/// A combination whose species are both owned but which still cannot be bred.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedPairingView {
+    pub parent_a: BreedingParentView,
+    pub parent_b: BreedingParentView,
+    /// `sameGender` or `onlySpecimen` — why the farm can't be filled.
+    pub reason: String,
+    /// The gender every owned candidate shares, when that is the blocker;
+    /// `None` when the problem is simply owning one of something.
+    pub blocking_gender: Option<String>,
+}
+
 /// A pairing needing at least one species the player does not own.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

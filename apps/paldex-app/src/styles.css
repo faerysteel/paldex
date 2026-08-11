@@ -1014,3 +1014,11 @@ code {
   color: var(--warn);
   white-space: nowrap;
 }
+
+/* A blocked combination is a problem to solve, not a suggestion to act on —
+   coloured like a warning rather than the accent the usable pairs carry. */
+.pair-blocked {
+  font-weight: 600;
+  color: var(--danger);
+  white-space: nowrap;
+}
