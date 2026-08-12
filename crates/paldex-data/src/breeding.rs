@@ -196,6 +196,11 @@ impl BreedingIndex {
     /// either. In the shipped data that is Panthalus, Astralym and the two
     /// Yakushima raid bosses.
     ///
+    /// The "not a farm parent" half is an inference from the absence of a
+    /// unique combo, not something any `DataTable` states, so it was confirmed
+    /// in-game: Panthalus cannot be assigned to a breeding farm or a breeding
+    /// lab at all.
+    ///
     /// This has to happen here rather than as rows arrive, because whether a
     /// unique combo names a species is not known until every row has been read.
     pub(crate) fn finish(&mut self) {
