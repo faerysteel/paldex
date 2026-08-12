@@ -356,8 +356,13 @@ pub fn pal_roster(
     eprintln!("[paldex] pal_roster: start");
     let snapshot_id = selected_snapshot_id(&state)?;
     let scope = player_scope(player_uid.as_deref());
-    let mut roster =
-        with_store(&app, &state, |store| queries::pal_roster(store, snapshot_id, scope))?;
+    // The roster answers "how are my Pals doing", so a selected player sees
+    // only their own; base-camp workers belong to the guild and show up under
+    // "All players". The breeding screen takes the opposite view — see
+    // `queries::BasePals`.
+    let mut roster = with_store(&app, &state, |store| {
+        queries::pal_roster(store, snapshot_id, scope, owner_view_base_pals(scope))
+    })?;
 
     if let Some(reference) = state.reference() {
         enrich_roster(&mut roster, reference);
@@ -681,6 +686,25 @@ fn player_scope(player_uid: Option<&str>) -> queries::PlayerScope<'_> {
     }
 }
 
+/// The breeding screen's "include base pals" checkbox, which defaults to on:
+/// a Pal sitting in a base camp is still one you can put in a breeding farm.
+fn base_pals(include: Option<bool>) -> queries::BasePals {
+    if include.unwrap_or(true) {
+        queries::BasePals::Include
+    } else {
+        queries::BasePals::Exclude
+    }
+}
+
+/// What the roster and analysis screens want: a selected player sees their own
+/// Pals, and unowned base-camp workers appear only under "All players".
+fn owner_view_base_pals(scope: queries::PlayerScope) -> queries::BasePals {
+    match scope {
+        queries::PlayerScope::All => queries::BasePals::Include,
+        queries::PlayerScope::Only(_) => queries::BasePals::Exclude,
+    }
+}
+
 /// Who is in the currently selected world, for the player selector.
 ///
 /// # Errors
@@ -728,10 +752,12 @@ fn analysis_roster(
     app: &AppHandle,
     state: &State<AppState>,
     scope: queries::PlayerScope,
+    base_pals: queries::BasePals,
 ) -> Result<(Vec<PalView>, Vec<paldex_model::Pal>), String> {
     let snapshot_id = selected_snapshot_id(state)?;
-    let mut views =
-        with_store(app, state, |store| queries::pal_roster(store, snapshot_id, scope))?;
+    let mut views = with_store(app, state, |store| {
+        queries::pal_roster(store, snapshot_id, scope, base_pals)
+    })?;
     if let Some(reference) = state.reference() {
         enrich_roster(&mut views, reference);
     }
@@ -799,7 +825,8 @@ pub fn pal_quality(
     state: State<AppState>,
     player_uid: Option<String>,
 ) -> Result<queries::PalQualityView, String> {
-    let (views, pals) = analysis_roster(&app, &state, player_scope(player_uid.as_deref()))?;
+    let scope = player_scope(player_uid.as_deref());
+    let (views, pals) = analysis_roster(&app, &state, scope, owner_view_base_pals(scope))?;
     Ok(quality_view(&views, &pals))
 }
 
@@ -885,8 +912,14 @@ pub fn breeding_options(
     state: State<AppState>,
     target: String,
     player_uid: Option<String>,
+    include_base_pals: Option<bool>,
 ) -> Result<Vec<queries::BreedingPairView>, String> {
-    let (views, pals) = analysis_roster(&app, &state, player_scope(player_uid.as_deref()))?;
+    let (views, pals) = analysis_roster(
+        &app,
+        &state,
+        player_scope(player_uid.as_deref()),
+        base_pals(include_base_pals),
+    )?;
     let Some(reference) = state.reference() else {
         eprintln!("[paldex] breeding_options: no reference data (no pak found)");
         return Ok(Vec::new());
@@ -1021,8 +1054,14 @@ pub fn unowned_breeding_options(
     state: State<AppState>,
     target: String,
     player_uid: Option<String>,
+    include_base_pals: Option<bool>,
 ) -> Result<Vec<queries::UnownedPairingView>, String> {
-    let (views, pals) = analysis_roster(&app, &state, player_scope(player_uid.as_deref()))?;
+    let (views, pals) = analysis_roster(
+        &app,
+        &state,
+        player_scope(player_uid.as_deref()),
+        base_pals(include_base_pals),
+    )?;
     let Some(reference) = state.reference() else {
         eprintln!("[paldex] unowned_breeding_options: no reference data (no pak found)");
         return Ok(Vec::new());
@@ -1144,7 +1183,8 @@ mod tests {
         let mut store = Store::open_in_memory().ok()?;
         let snapshot_id = crate::sync::sync_world(&mut store, &world).ok()?;
         Some((
-            queries::pal_roster(&store, snapshot_id, queries::PlayerScope::All).ok()?,
+            queries::pal_roster(&store, snapshot_id, queries::PlayerScope::All, queries::BasePals::Include)
+                .ok()?,
             queries::player_flags_detail(&store, snapshot_id).ok()?,
         ))
     }
@@ -1380,7 +1420,13 @@ mod tests {
         let snapshot_id = crate::sync::sync_world(&mut store, &world).expect("sync");
 
         let players = queries::world_players(&store, snapshot_id).expect("world_players");
-        let all = queries::pal_roster(&store, snapshot_id, queries::PlayerScope::All).expect("all");
+        let all = queries::pal_roster(
+            &store,
+            snapshot_id,
+            queries::PlayerScope::All,
+            queries::BasePals::Include,
+        )
+        .expect("all");
 
         let mut scoped_total = 0;
         for p in &players {
@@ -1388,6 +1434,7 @@ mod tests {
                 &store,
                 snapshot_id,
                 queries::PlayerScope::Only(&p.player_uid),
+                queries::BasePals::Exclude,
             )
             .expect("scoped");
             assert!(
@@ -1409,6 +1456,50 @@ mod tests {
             unowned > 0,
             "base-camp workers have no owner; if this is 0 the fixture changed"
         );
+    }
+
+    /// Base-camp Pals have no owner but can still be put in a breeding farm,
+    /// so `BasePals::Include` must add them to *every* scope — including a
+    /// single player's, where the owner filter would otherwise drop them.
+    #[test]
+    fn including_base_pals_adds_them_to_every_scope() {
+        let Some(world) = crate::sync::tests::real_trackable_world() else {
+            eprintln!("skipping: need a real save");
+            return;
+        };
+        let mut store = Store::open_in_memory().expect("store");
+        let snapshot_id = crate::sync::sync_world(&mut store, &world).expect("sync");
+        let players = queries::world_players(&store, snapshot_id).expect("world_players");
+
+        let roster = |scope, base| {
+            queries::pal_roster(&store, snapshot_id, scope, base).expect("pal_roster")
+        };
+
+        let all_with = roster(queries::PlayerScope::All, queries::BasePals::Include);
+        let all_without = roster(queries::PlayerScope::All, queries::BasePals::Exclude);
+        let base_count = all_with.len() - all_without.len();
+        eprintln!("{} base pals in this world", base_count);
+        assert!(base_count > 0, "expected some unowned base-camp Pals");
+        assert!(
+            all_without.iter().all(|p| p.owner.is_some()),
+            "excluding base pals must leave only owned ones"
+        );
+
+        for p in &players {
+            let scope = queries::PlayerScope::Only(&p.player_uid);
+            let with = roster(scope, queries::BasePals::Include);
+            let without = roster(scope, queries::BasePals::Exclude);
+            assert_eq!(
+                with.len(),
+                without.len() + base_count,
+                "a player scope with base pals should be their own plus every base pal"
+            );
+            assert!(
+                with.iter().all(|pal| pal.owner.is_none()
+                    || pal.owner.as_deref() == Some(p.player_uid.as_str())),
+                "no other player's Pals should leak in"
+            );
+        }
     }
 
     /// The real roster in both shapes `analysis_roster` produces, without a
@@ -2176,11 +2267,25 @@ mod tests {
             .collect();
         targets.sort();
         targets.dedup();
+        // The "include base pals" checkbox is a second axis, so each target is
+        // captured both ways. Base-camp Pals have no owner but can still be
+        // bred, so unchecking it genuinely changes the pairs — a harness that
+        // answered the same either way would misrepresent the control.
+        let no_base: Vec<PalView> =
+            views.iter().filter(|v| v.owner.is_some()).cloned().collect();
+        let no_base_pals: Vec<paldex_model::Pal> =
+            no_base.iter().filter_map(to_model_pal).collect();
+
         let mut pair_total = 0usize;
         for target in &targets {
             let pairs = breeding_view(&views, &pals, target, &loaded.index);
             pair_total += pairs.len();
             write(&format!("breeding_options__{target}"), serde_json::to_value(&pairs).unwrap());
+            write(
+                &format!("breeding_options__{target}__nobase"),
+                serde_json::to_value(breeding_view(&no_base, &no_base_pals, target, &loaded.index))
+                    .unwrap(),
+            );
         }
         eprintln!("fixture: {} breeding targets, {pair_total} pairs total", targets.len());
 
@@ -2229,6 +2334,13 @@ mod tests {
                 &format!("unowned_breeding_options__{target}"),
                 serde_json::to_value(&pairings).unwrap(),
             );
+            let without = unowned_view(&no_base, &no_base_pals, target, &loaded.index);
+            if !without.is_empty() {
+                write(
+                    &format!("unowned_breeding_options__{target}__nobase"),
+                    serde_json::to_value(&without).unwrap(),
+                );
+            }
         }
         eprintln!("fixture: {unowned_files} unowned targets, {unowned_total} pairings total");
 
@@ -2301,7 +2413,8 @@ mod tests {
             serde_json::to_value(dex_with_reference(&facts, &loaded.index)).unwrap(),
         );
 
-        let mut roster = queries::pal_roster(&store, snapshot_id_check, scope).ok()?;
+        let mut roster =
+            queries::pal_roster(&store, snapshot_id_check, scope, queries::BasePals::Exclude).ok()?;
         enrich_roster(&mut roster, &loaded.index);
         let pals: Vec<paldex_model::Pal> = roster.iter().filter_map(to_model_pal).collect();
         let views: Vec<PalView> = roster
@@ -2314,11 +2427,28 @@ mod tests {
             serde_json::to_value(quality_view(&views, &pals)).unwrap(),
         );
 
-        // Breeding is per target *and* per player, which is the combination
-        // that makes this capture expensive. Only targets this player's own
-        // roster can reach get a file; the rest resolve to the empty list, as
-        // in the unscoped case.
-        let mut owned: Vec<&str> = pals.iter().map(|p| p.character_id.as_str()).collect();
+        // Breeding takes base-camp Pals as parents by default even under a
+        // player scope, so it needs a second roster the owner filter didn't
+        // drop. `views`/`pals` above stay owner-only: that is what the roster
+        // and analysis tabs render.
+        let mut with_base =
+            queries::pal_roster(&store, snapshot_id_check, scope, queries::BasePals::Include)
+                .ok()?;
+        enrich_roster(&mut with_base, &loaded.index);
+        let base_pals_model: Vec<paldex_model::Pal> =
+            with_base.iter().filter_map(to_model_pal).collect();
+        let base_views: Vec<PalView> = with_base
+            .into_iter()
+            .filter(|v| uuid::Uuid::parse_str(&v.instance_id).is_ok())
+            .collect();
+
+        // Breeding is per target, per player *and* per checkbox state, which
+        // is the combination that makes this capture expensive. Targets are
+        // taken from the wider roster so nothing reachable with base Pals is
+        // missing a file; a target with no file is one neither pool can reach,
+        // and resolves to the empty list as in the unscoped case.
+        let mut owned: Vec<&str> =
+            base_pals_model.iter().map(|p| p.character_id.as_str()).collect();
         owned.sort_unstable();
         owned.dedup();
         let mut targets: Vec<String> = owned
@@ -2334,17 +2464,21 @@ mod tests {
         targets.sort();
         targets.dedup();
         for target in &targets {
-            let pairs = breeding_view(&views, &pals, target, &loaded.index);
-            write(
-                &format!("breeding_options__{target}{suffix}"),
-                serde_json::to_value(&pairs).unwrap(),
-            );
-            let pairings = unowned_view(&views, &pals, target, &loaded.index);
-            if !pairings.is_empty() {
+            for (variant, v, p) in [
+                ("", &base_views, &base_pals_model),
+                ("__nobase", &views, &pals),
+            ] {
                 write(
-                    &format!("unowned_breeding_options__{target}{suffix}"),
-                    serde_json::to_value(&pairings).unwrap(),
+                    &format!("breeding_options__{target}{variant}{suffix}"),
+                    serde_json::to_value(breeding_view(v, p, target, &loaded.index)).unwrap(),
                 );
+                let pairings = unowned_view(v, p, target, &loaded.index);
+                if !pairings.is_empty() {
+                    write(
+                        &format!("unowned_breeding_options__{target}{variant}{suffix}"),
+                        serde_json::to_value(&pairings).unwrap(),
+                    );
+                }
             }
         }
         eprintln!(

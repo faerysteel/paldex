@@ -81,7 +81,7 @@ pub struct BaseStatsView {
     pub craft_speed: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PalView {
     pub instance_id: String,
@@ -363,22 +363,34 @@ pub fn snapshot_summary(store: &Store, snapshot_id: i64) -> Result<SnapshotSumma
     Ok(SnapshotSummaryView { snapshot_id, pal_count, player_count, taken_at })
 }
 
-/// The snapshot's Pals, optionally only those one player owns.
+/// Whether Pals with no owner — base-camp workers, 71 of them in the save
+/// this was built against — count as part of the roster being asked for.
 ///
-/// Under [`PlayerScope::Only`] this filters on `pals.owner`, which drops Pals
-/// with no owner at all — base-camp workers, 71 of them in the save this was
-/// built against. That is correct for "show me *my* Pals", and it is why
-/// [`PlayerScope::All`] has to stay reachable from the UI: it is the only view
-/// that includes them.
+/// Orthogonal to [`PlayerScope`], not a special case of it. A base Pal
+/// belongs to the guild rather than to any player, so "who owns it" and
+/// "should it be here" are genuinely two questions: the breeding screen wants
+/// them under *every* scope, because a Pal sitting in a base is still a Pal
+/// you can put in a breeding farm, while the roster and analysis screens are
+/// answering "how are *my* Pals doing" and reasonably leave them out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BasePals {
+    Include,
+    Exclude,
+}
+
+/// The snapshot's Pals, filtered by who owns them.
 pub fn pal_roster(
     store: &Store,
     snapshot_id: i64,
     scope: PlayerScope,
+    base_pals: BasePals,
 ) -> Result<Vec<PalView>, String> {
     let conn = store.conn();
-    let owner_clause = match scope {
-        PlayerScope::All => "",
-        PlayerScope::Only(_) => " AND owner = ?2",
+    let owner_clause = match (scope, base_pals) {
+        (PlayerScope::All, BasePals::Include) => "",
+        (PlayerScope::All, BasePals::Exclude) => " AND owner IS NOT NULL",
+        (PlayerScope::Only(_), BasePals::Include) => " AND (owner = ?2 OR owner IS NULL)",
+        (PlayerScope::Only(_), BasePals::Exclude) => " AND owner = ?2",
     };
     let sql = format!(
         "SELECT instance_id, character_id, owner, level, rank,

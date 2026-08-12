@@ -949,6 +949,33 @@ code {
   font-size: 1rem;
 }
 
+/* The target picker and the base-pal toggle read as one control group, so
+   they stay together on the right rather than being spread by the header's
+   space-between. */
+.breeding-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+}
+
+/* Base-camp Pals have no owner but can still be bred, so they are parents by
+   default under every player scope; this turns them off. */
+.breeding-base-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.breeding-base-toggle input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .pairs {
   list-style: none;
   margin: 0;

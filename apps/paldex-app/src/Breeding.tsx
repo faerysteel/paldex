@@ -58,6 +58,9 @@ export default function Breeding({ summary, playerUid }: Props) {
   const [unowned, setUnowned] = useState<UnownedPairingView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Base-camp Pals have no owner, but they can still be put in a breeding
+  // farm, so they count as parents under every player scope by default.
+  const [includeBasePals, setIncludeBasePals] = useState(true);
   const [limit, setLimit] = useState(PAIR_PAGE);
 
   // Only species breeding can actually produce — not the whole Paldeck. The
@@ -94,8 +97,16 @@ export default function Breeding({ summary, playerUid }: Props) {
     void (async () => {
       try {
         const [owned, waiting] = await Promise.all([
-          invoke<BreedingPairView[]>("breeding_options", { target, playerUid }),
-          invoke<UnownedPairingView[]>("unowned_breeding_options", { target, playerUid }),
+          invoke<BreedingPairView[]>("breeding_options", {
+            target,
+            playerUid,
+            includeBasePals,
+          }),
+          invoke<UnownedPairingView[]>("unowned_breeding_options", {
+            target,
+            playerUid,
+            includeBasePals,
+          }),
         ]);
         if (cancelled) return;
         setPairs(owned);
@@ -109,7 +120,7 @@ export default function Breeding({ summary, playerUid }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [target, playerUid, summary.snapshotId]);
+  }, [target, playerUid, includeBasePals, summary.snapshotId]);
 
   // Paging is per pool, so switching tabs starts at the top of the new list.
   useEffect(() => setLimit(PAIR_PAGE), [pool]);
@@ -142,19 +153,29 @@ export default function Breeding({ summary, playerUid }: Props) {
     <div className="breeding">
       <div className="breeding-head">
         <h2>Breed for a species</h2>
-        <select
-          className="picker"
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
-          aria-label="Target species"
-        >
-          <option value="">Pick a species…</option>
-          {targets.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.label}
-            </option>
-          ))}
-        </select>
+        <div className="breeding-controls">
+          <label className="breeding-base-toggle">
+            <input
+              type="checkbox"
+              checked={includeBasePals}
+              onChange={(e) => setIncludeBasePals(e.target.checked)}
+            />
+            Include base pals
+          </label>
+          <select
+            className="picker"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            aria-label="Target species"
+          >
+            <option value="">Pick a species…</option>
+            {targets.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {target && (

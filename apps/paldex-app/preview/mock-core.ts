@@ -11,14 +11,18 @@
 // dump ran with PALDEX_FIXTURE_PLAYERS=1. Without it `world_players` is empty,
 // so the selector never renders and nothing ever asks for a scoped fixture.
 export async function invoke<T>(cmd: string, args?: unknown): Promise<T> {
-  const { target, playerUid } = (args ?? {}) as {
+  const { target, playerUid, includeBasePals } = (args ?? {}) as {
     target?: unknown;
     playerUid?: unknown;
+    includeBasePals?: unknown;
   };
   const suffix = typeof playerUid === "string" ? `__player_${playerUid}` : "";
+  // Only the non-default state gets its own file, so the common case keeps
+  // the name it already had.
+  const variant = includeBasePals === false ? "__nobase" : "";
 
   if (typeof target === "string") {
-    const pairs = await load<T>(`${cmd}__${target}${suffix}`);
+    const pairs = await load<T>(`${cmd}__${target}${variant}${suffix}`);
     return pairs ?? ([] as unknown as T);
   }
 

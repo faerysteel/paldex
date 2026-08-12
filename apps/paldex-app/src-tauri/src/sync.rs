@@ -248,8 +248,13 @@ pub(crate) mod tests {
         );
         assert!(summary.pal_count > 0, "expected at least one pal in a real world");
 
-        let roster = crate::queries::pal_roster(&store, snapshot_id, crate::queries::PlayerScope::All)
-            .expect("pal_roster");
+        let roster = crate::queries::pal_roster(
+            &store,
+            snapshot_id,
+            crate::queries::PlayerScope::All,
+            crate::queries::BasePals::Include,
+        )
+        .expect("pal_roster");
         assert_eq!(roster.len() as i64, summary.pal_count);
         assert!(
             roster.iter().all(|p| p.iv_hp <= 100 && p.iv_shot <= 100 && p.iv_defense <= 100),
