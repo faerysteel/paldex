@@ -40,13 +40,14 @@ export default function Roster({ summary, playerUid }: Props) {
   const [filter, setFilter] = useState("");
   const [element, setElement] = useState(ANY_ELEMENT);
   const [sort, setSort] = useState<Sort>({ column: "level", direction: "desc" });
+  const [includeBasePals, setIncludeBasePals] = useState(true);
 
   const load = useCallback(async () => {
     setError(null);
     try {
       console.info("[paldex] roster: requesting data");
       const [palsResult, playersResult, flagsResult] = await Promise.all([
-        invoke<PalView[]>("pal_roster", { playerUid }),
+        invoke<PalView[]>("pal_roster", { playerUid, includeBasePals }),
         invoke<PlayerProgressView[]>("player_progress"),
         invoke<PlayerFlagsView[]>("player_flags_detail"),
       ]);
@@ -57,7 +58,7 @@ export default function Roster({ summary, playerUid }: Props) {
     } catch (e) {
       setError(String(e));
     }
-  }, [playerUid]);
+  }, [playerUid, includeBasePals]);
 
   useEffect(() => {
     void load();
@@ -234,6 +235,14 @@ export default function Roster({ summary, playerUid }: Props) {
             ))}
           </select>
         )}
+        <label className="base-toggle">
+          <input
+            type="checkbox"
+            checked={includeBasePals}
+            onChange={(e) => setIncludeBasePals(e.target.checked)}
+          />
+          Include base pals
+        </label>
       </div>
 
       {pals === null && !error && <p className="muted">Loading roster…</p>}

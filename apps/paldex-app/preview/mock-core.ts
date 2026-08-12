@@ -10,6 +10,8 @@
 // A selected player adds a `__player_<uid>` suffix, captured only when the
 // dump ran with PALDEX_FIXTURE_PLAYERS=1. Without it `world_players` is empty,
 // so the selector never renders and nothing ever asks for a scoped fixture.
+// Unticking "include base pals" adds `__nobase` ahead of the player suffix, on
+// every command that takes the flag — roster, analysis and breeding alike.
 export async function invoke<T>(cmd: string, args?: unknown): Promise<T> {
   const { target, playerUid, includeBasePals } = (args ?? {}) as {
     target?: unknown;
@@ -26,8 +28,8 @@ export async function invoke<T>(cmd: string, args?: unknown): Promise<T> {
     return pairs ?? ([] as unknown as T);
   }
 
-  const fixture = await load<T>(`${cmd}${suffix}`);
-  if (fixture === null) throw new Error(`no fixture for ${cmd}${suffix}`);
+  const fixture = await load<T>(`${cmd}${variant}${suffix}`);
+  if (fixture === null) throw new Error(`no fixture for ${cmd}${variant}${suffix}`);
   return fixture;
 }
 

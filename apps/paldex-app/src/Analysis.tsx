@@ -48,15 +48,16 @@ export default function Analysis({ summary, playerUid }: Props) {
   const [list, setList] = useState<List>("graded");
   const [filter, setFilter] = useState("");
   const [limit, setLimit] = useState(PAGE);
+  const [includeBasePals, setIncludeBasePals] = useState(true);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      setQuality(await invoke<PalQualityView>("pal_quality", { playerUid }));
+      setQuality(await invoke<PalQualityView>("pal_quality", { playerUid, includeBasePals }));
     } catch (e) {
       setError(String(e));
     }
-  }, [playerUid]);
+  }, [playerUid, includeBasePals]);
 
   useEffect(() => {
     void load();
@@ -154,6 +155,14 @@ export default function Analysis({ summary, playerUid }: Props) {
             </button>
           ))}
         </div>
+        <label className="base-toggle">
+          <input
+            type="checkbox"
+            checked={includeBasePals}
+            onChange={(e) => setIncludeBasePals(e.target.checked)}
+          />
+          Include base pals
+        </label>
       </div>
 
       <p className="muted dex-count">

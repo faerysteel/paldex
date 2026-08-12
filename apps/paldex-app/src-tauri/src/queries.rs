@@ -368,10 +368,12 @@ pub fn snapshot_summary(store: &Store, snapshot_id: i64) -> Result<SnapshotSumma
 ///
 /// Orthogonal to [`PlayerScope`], not a special case of it. A base Pal
 /// belongs to the guild rather than to any player, so "who owns it" and
-/// "should it be here" are genuinely two questions: the breeding screen wants
-/// them under *every* scope, because a Pal sitting in a base is still a Pal
-/// you can put in a breeding farm, while the roster and analysis screens are
-/// answering "how are *my* Pals doing" and reasonably leave them out.
+/// "should it be here" are genuinely two questions, and every screen answers
+/// the second one the same way: base pals are included under *every* scope
+/// unless the user unticks the box. Deriving this from the scope instead — so
+/// that picking a player hid them — was tried and rejected; a Pal vanishing
+/// from the roster because it happens to be working in a base is surprising,
+/// and the checkbox already says what is going on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BasePals {
     Include,

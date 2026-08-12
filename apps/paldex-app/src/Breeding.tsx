@@ -154,7 +154,7 @@ export default function Breeding({ summary, playerUid }: Props) {
       <div className="breeding-head">
         <h2>Breed for a species</h2>
         <div className="breeding-controls">
-          <label className="breeding-base-toggle">
+          <label className="base-toggle">
             <input
               type="checkbox"
               checked={includeBasePals}

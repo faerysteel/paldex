@@ -352,16 +352,13 @@ pub fn pal_roster(
     app: AppHandle,
     state: State<AppState>,
     player_uid: Option<String>,
+    include_base_pals: Option<bool>,
 ) -> Result<Vec<PalView>, String> {
     eprintln!("[paldex] pal_roster: start");
     let snapshot_id = selected_snapshot_id(&state)?;
     let scope = player_scope(player_uid.as_deref());
-    // The roster answers "how are my Pals doing", so a selected player sees
-    // only their own; base-camp workers belong to the guild and show up under
-    // "All players". The breeding screen takes the opposite view — see
-    // `queries::BasePals`.
     let mut roster = with_store(&app, &state, |store| {
-        queries::pal_roster(store, snapshot_id, scope, owner_view_base_pals(scope))
+        queries::pal_roster(store, snapshot_id, scope, base_pals(include_base_pals))
     })?;
 
     if let Some(reference) = state.reference() {
@@ -686,22 +683,21 @@ fn player_scope(player_uid: Option<&str>) -> queries::PlayerScope<'_> {
     }
 }
 
-/// The breeding screen's "include base pals" checkbox, which defaults to on:
-/// a Pal sitting in a base camp is still one you can put in a breeding farm.
+/// Every screen's "include base pals" checkbox, which defaults to on.
+///
+/// Base-camp workers are unowned — they belong to the guild, not a player — so
+/// they could plausibly be hidden whenever a single player is selected. They
+/// are not: the checkbox is the only thing that decides, under every scope, on
+/// every tab. A base Pal is still a Pal you have, and answering "where did it
+/// go?" by silently dropping it from the roster is worse than showing it.
+///
+/// `None` is the default rather than an error because the frontend omits the
+/// argument on first render; see `queries::BasePals`.
 fn base_pals(include: Option<bool>) -> queries::BasePals {
     if include.unwrap_or(true) {
         queries::BasePals::Include
     } else {
         queries::BasePals::Exclude
-    }
-}
-
-/// What the roster and analysis screens want: a selected player sees their own
-/// Pals, and unowned base-camp workers appear only under "All players".
-fn owner_view_base_pals(scope: queries::PlayerScope) -> queries::BasePals {
-    match scope {
-        queries::PlayerScope::All => queries::BasePals::Include,
-        queries::PlayerScope::Only(_) => queries::BasePals::Exclude,
     }
 }
 
@@ -824,9 +820,10 @@ pub fn pal_quality(
     app: AppHandle,
     state: State<AppState>,
     player_uid: Option<String>,
+    include_base_pals: Option<bool>,
 ) -> Result<queries::PalQualityView, String> {
     let scope = player_scope(player_uid.as_deref());
-    let (views, pals) = analysis_roster(&app, &state, scope, owner_view_base_pals(scope))?;
+    let (views, pals) = analysis_roster(&app, &state, scope, base_pals(include_base_pals))?;
     Ok(quality_view(&views, &pals))
 }
 
@@ -1318,6 +1315,34 @@ mod tests {
             view.entries.iter().all(|e| !e.display_name.is_empty()),
             "every tile needs a label"
         );
+    }
+
+    /// Base pals are in by default, and the player scope has no say in it.
+    ///
+    /// This replaces a rule that derived the answer from the scope, so that
+    /// picking a player silently dropped the 71 unowned base-camp workers from
+    /// the roster and analysis tabs while leaving them in breeding. The
+    /// checkbox is now the only input, on every tab, which is only true while
+    /// `base_pals` ignores the scope entirely — hence a test rather than a
+    /// comment.
+    #[test]
+    fn base_pals_default_to_included_under_every_scope() {
+        assert_eq!(base_pals(None), queries::BasePals::Include, "an absent flag is the default");
+        assert_eq!(base_pals(Some(true)), queries::BasePals::Include);
+        assert_eq!(base_pals(Some(false)), queries::BasePals::Exclude);
+
+        // The signature carries this: `base_pals` cannot see a `PlayerScope`.
+        // Both scopes reach it through the same argument.
+        for uid in [None, Some("11111111-2222-3333-4444-555555555555")] {
+            let scope = player_scope(uid);
+            let expected = if uid.is_some() {
+                queries::PlayerScope::Only("11111111-2222-3333-4444-555555555555")
+            } else {
+                queries::PlayerScope::All
+            };
+            assert_eq!(scope, expected);
+            assert_eq!(base_pals(None), queries::BasePals::Include);
+        }
     }
 
     /// Capture progress is per player, and scoping to one must report *that
@@ -2276,6 +2301,15 @@ mod tests {
         let no_base_pals: Vec<paldex_model::Pal> =
             no_base.iter().filter_map(to_model_pal).collect();
 
+        // The roster and analysis tabs read that same axis, so they need the
+        // unticked capture too. Their default files were written above from the
+        // base-inclusive roster, which is what the checkbox starts on.
+        write("pal_roster__nobase", serde_json::to_value(&no_base).unwrap());
+        write(
+            "pal_quality__nobase",
+            serde_json::to_value(quality_view(&no_base, &no_base_pals)).unwrap(),
+        );
+
         let mut pair_total = 0usize;
         for target in &targets {
             let pairs = breeding_view(&views, &pals, target, &loaded.index);
@@ -2413,34 +2447,30 @@ mod tests {
             serde_json::to_value(dex_with_reference(&facts, &loaded.index)).unwrap(),
         );
 
-        let mut roster =
-            queries::pal_roster(&store, snapshot_id_check, scope, queries::BasePals::Exclude).ok()?;
-        enrich_roster(&mut roster, &loaded.index);
-        let pals: Vec<paldex_model::Pal> = roster.iter().filter_map(to_model_pal).collect();
-        let views: Vec<PalView> = roster
-            .into_iter()
-            .filter(|v| uuid::Uuid::parse_str(&v.instance_id).is_ok())
-            .collect();
-        write(&format!("pal_roster{suffix}"), serde_json::to_value(&views).unwrap());
-        write(
-            &format!("pal_quality{suffix}"),
-            serde_json::to_value(quality_view(&views, &pals)).unwrap(),
-        );
+        // Every tab reads the same two axes now — the selected player, and the
+        // "include base pals" checkbox — so each roster-derived fixture is
+        // captured both ways. The unsuffixed file is the checkbox's default
+        // (on), and `__nobase` is the unticked state.
+        let scoped_roster = |base| -> Option<(Vec<PalView>, Vec<paldex_model::Pal>)> {
+            let mut rows = queries::pal_roster(&store, snapshot_id_check, scope, base).ok()?;
+            enrich_roster(&mut rows, &loaded.index);
+            let pals: Vec<paldex_model::Pal> = rows.iter().filter_map(to_model_pal).collect();
+            let views: Vec<PalView> = rows
+                .into_iter()
+                .filter(|v| uuid::Uuid::parse_str(&v.instance_id).is_ok())
+                .collect();
+            Some((views, pals))
+        };
+        let (views, pals) = scoped_roster(queries::BasePals::Exclude)?;
+        let (base_views, base_pals_model) = scoped_roster(queries::BasePals::Include)?;
 
-        // Breeding takes base-camp Pals as parents by default even under a
-        // player scope, so it needs a second roster the owner filter didn't
-        // drop. `views`/`pals` above stay owner-only: that is what the roster
-        // and analysis tabs render.
-        let mut with_base =
-            queries::pal_roster(&store, snapshot_id_check, scope, queries::BasePals::Include)
-                .ok()?;
-        enrich_roster(&mut with_base, &loaded.index);
-        let base_pals_model: Vec<paldex_model::Pal> =
-            with_base.iter().filter_map(to_model_pal).collect();
-        let base_views: Vec<PalView> = with_base
-            .into_iter()
-            .filter(|v| uuid::Uuid::parse_str(&v.instance_id).is_ok())
-            .collect();
+        for (variant, v, p) in [("", &base_views, &base_pals_model), ("__nobase", &views, &pals)] {
+            write(&format!("pal_roster{variant}{suffix}"), serde_json::to_value(v).unwrap());
+            write(
+                &format!("pal_quality{variant}{suffix}"),
+                serde_json::to_value(quality_view(v, p)).unwrap(),
+            );
+        }
 
         // Breeding is per target, per player *and* per checkbox state, which
         // is the combination that makes this capture expensive. Targets are

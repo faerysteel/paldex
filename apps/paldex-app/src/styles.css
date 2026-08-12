@@ -959,9 +959,10 @@ code {
   flex-wrap: wrap;
 }
 
-/* Base-camp Pals have no owner but can still be bred, so they are parents by
-   default under every player scope; this turns them off. */
-.breeding-base-toggle {
+/* Base-camp Pals have no owner, but they are still yours, so every tab counts
+   them by default under every player scope; this turns them off. Shared by the
+   Roster, Analysis and Breeding controls. */
+.base-toggle {
   display: flex;
   align-items: center;
   gap: 0.45rem;
@@ -971,7 +972,7 @@ code {
   user-select: none;
 }
 
-.breeding-base-toggle input {
+.base-toggle input {
   accent-color: var(--accent);
   cursor: pointer;
 }
