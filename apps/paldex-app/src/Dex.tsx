@@ -190,11 +190,22 @@ export default function Dex({ summary, playerUid }: Props) {
 }
 
 /**
+ * How far this species is through its capture bonus, from 0 to
+ * `CAPTURE_BONUS_AT`.
+ *
  * The save records the tier directly, so trust it and fall back to the count
- * only for a snapshot ingested before tiers were stored.
+ * only for a snapshot ingested before tiers were stored. Capping the fallback
+ * is what keeps the two answers agreeing: the stored tier is exactly
+ * `min(captureCount, CAPTURE_BONUS_AT)` in every observed save, so the
+ * fallback has to be capped the same way or a species caught many times would
+ * read as an impossible tier.
  */
+function bonusTier(entry: DexEntryView): number {
+  return Math.min(Math.max(entry.bonusTier, entry.captureCount), CAPTURE_BONUS_AT);
+}
+
 function isBonusComplete(entry: DexEntryView): boolean {
-  return entry.bonusTier >= CAPTURE_BONUS_AT || entry.captureCount >= CAPTURE_BONUS_AT;
+  return bonusTier(entry) >= CAPTURE_BONUS_AT;
 }
 
 /** The highest value seen for each base stat, used to scale the detail bars. */
@@ -262,8 +273,8 @@ function Detail({
               : "Not caught"}
             {isBonusComplete(entry)
               ? " · capture bonus complete"
-              : entry.captureCount > 0 &&
-                ` · capture bonus ${Math.min(entry.captureCount, CAPTURE_BONUS_AT)}/${CAPTURE_BONUS_AT}`}
+              : bonusTier(entry) > 0 &&
+                ` · capture bonus ${bonusTier(entry)}/${CAPTURE_BONUS_AT}`}
           </p>
         </div>
         <button className="btn btn-ghost" onClick={onClose}>
@@ -348,6 +359,7 @@ function Tile({
   onSelect: () => void;
 }) {
   const complete = isBonusComplete(entry);
+  const tier = bonusTier(entry);
   const className = [
     "dex-tile",
     entry.caught ? "dex-caught" : "dex-unseen",
@@ -360,10 +372,15 @@ function Tile({
   const label = entry.dexLabel ? `No.${entry.dexLabel} ${entry.displayName}` : entry.displayName;
   const elementSuffix =
     entry.elements.length > 0 ? ` — ${entry.elements.map((e) => e.name).join("/")}` : "";
+  const bonusSuffix = complete
+    ? ", bonus complete"
+    : tier > 0
+      ? `, bonus ${tier}/${CAPTURE_BONUS_AT}`
+      : "";
   const title = entry.caught
     ? `${label}${elementSuffix} — ${entry.captureCount} capture${
         entry.captureCount === 1 ? "" : "s"
-      }${complete ? ", bonus complete" : ""}`
+      }${bonusSuffix}`
     : `${label}${elementSuffix} — not caught`;
 
   return (
@@ -389,20 +406,28 @@ function Tile({
             />
           ))}
         </span>
+        {/* Below the top tier the capture count and the tier are the same
+            number, so showing both would read "×3 3/5". Only a complete
+            species has a count worth stating on its own — a high capture count is
+            interesting, three captures is just the tier again. */}
         <span className="dex-meta">
-          {entry.caught ? (
+          {!entry.caught ? (
+            <span className="dex-dash">—</span>
+          ) : complete ? (
             <>
               {entry.captureCount > 0 && (
                 <span className="dex-captures">×{entry.captureCount}</span>
               )}
-              {complete && (
-                <span className="dex-star" title="Capture bonus complete">
-                  ★
-                </span>
-              )}
+              <span className="dex-star" title="Capture bonus complete">
+                ★
+              </span>
             </>
           ) : (
-            <span className="dex-dash">—</span>
+            tier > 0 && (
+              <span className="dex-tier" title={`Capture bonus ${tier}/${CAPTURE_BONUS_AT}`}>
+                {tier}/{CAPTURE_BONUS_AT}
+              </span>
+            )
           )}
         </span>
       </button>

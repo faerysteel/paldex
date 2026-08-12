@@ -618,6 +618,14 @@ code {
   font-variant-numeric: tabular-nums;
 }
 
+/* Progress toward the capture bonus, shown only while it is incomplete — a
+   finished species gets the star instead. Deliberately quieter than the star:
+   this is the state you are trying to leave. */
+.dex-tier {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
 .dex-star {
   color: var(--warn);
 }
