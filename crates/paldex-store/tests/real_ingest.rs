@@ -73,6 +73,7 @@ fn real_snapshot() -> Option<(World, SnapshotInput)> {
         level_hash,
         pals,
         players,
+        player_identities: character_result.players,
         guilds,
         base_camps,
     };
@@ -141,6 +142,7 @@ fn dex_events_are_monotonic_across_snapshots() {
         level_hash: "different-hash".to_owned(),
         pals: input.pals.iter().take(input.pals.len() / 2).cloned().collect(),
         players: input.players.clone(),
+        player_identities: input.player_identities.clone(),
         guilds: input.guilds.clone(),
         base_camps: input.base_camps.clone(),
     };
@@ -177,6 +179,7 @@ fn pruning_keeps_exactly_n_snapshots() {
             level_hash: format!("hash-{i}"),
             pals: input.pals.clone(),
             players: Vec::new(),
+            player_identities: Vec::new(),
             guilds: Vec::new(),
             base_camps: Vec::new(),
         };

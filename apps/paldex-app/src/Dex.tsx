@@ -8,11 +8,9 @@ import type {
   ElementView,
   SnapshotSummaryView,
 } from "./types";
+import { CAPTURE_BONUS_AT } from "./types";
 import { useSpeciesIcons } from "./icons";
 import { elementColor } from "./elements";
-
-/** Captures needed for a species' capture bonus. */
-const BONUS_AT = 10;
 
 /** Sentinel for "don't filter by element" in the element picker. */
 const ANY_ELEMENT = "";
@@ -21,9 +19,11 @@ type Show = "all" | "caught" | "missing";
 
 interface Props {
   summary: SnapshotSummaryView;
+  /** Whose dex to show; `null` is every player in the world. */
+  playerUid: string | null;
 }
 
-export default function Dex({ summary }: Props) {
+export default function Dex({ summary, playerUid }: Props) {
   const [dex, setDex] = useState<DexProgressView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [show, setShow] = useState<Show>("all");
@@ -34,11 +34,11 @@ export default function Dex({ summary }: Props) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      setDex(await invoke<DexProgressView>("dex_progress"));
+      setDex(await invoke<DexProgressView>("dex_progress", { playerUid }));
     } catch (e) {
       setError(String(e));
     }
-  }, []);
+  }, [playerUid]);
 
   useEffect(() => {
     void load();
@@ -106,7 +106,7 @@ export default function Dex({ summary }: Props) {
           <Stat
             label="Capture bonus"
             value={bonusComplete}
-            hint={`species with ${BONUS_AT}+ captures`}
+            hint={`species with ${CAPTURE_BONUS_AT}+ captures`}
           />
           {total > 0 && (
             <Stat label="Completion" value={`${Math.round((caught / total) * 100)}%`} />
@@ -189,8 +189,12 @@ export default function Dex({ summary }: Props) {
   );
 }
 
+/**
+ * The save records the tier directly, so trust it and fall back to the count
+ * only for a snapshot ingested before tiers were stored.
+ */
 function isBonusComplete(entry: DexEntryView): boolean {
-  return entry.bonusClaimed || entry.captureCount >= BONUS_AT;
+  return entry.bonusTier >= CAPTURE_BONUS_AT || entry.captureCount >= CAPTURE_BONUS_AT;
 }
 
 /** The highest value seen for each base stat, used to scale the detail bars. */
@@ -256,7 +260,10 @@ function Detail({
             {entry.caught
               ? `${entry.captureCount} capture${entry.captureCount === 1 ? "" : "s"}`
               : "Not caught"}
-            {isBonusComplete(entry) && " · capture bonus complete"}
+            {isBonusComplete(entry)
+              ? " · capture bonus complete"
+              : entry.captureCount > 0 &&
+                ` · capture bonus ${Math.min(entry.captureCount, CAPTURE_BONUS_AT)}/${CAPTURE_BONUS_AT}`}
           </p>
         </div>
         <button className="btn btn-ghost" onClick={onClose}>

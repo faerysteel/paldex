@@ -7,16 +7,23 @@
 // roster cannot breed, so its absence resolves to the empty list the real
 // command returns — deliberately *not* a fallback to some other target's
 // capture, which would show one species' pairs under another species' name.
+// A selected player adds a `__player_<uid>` suffix, captured only when the
+// dump ran with PALDEX_FIXTURE_PLAYERS=1. Without it `world_players` is empty,
+// so the selector never renders and nothing ever asks for a scoped fixture.
 export async function invoke<T>(cmd: string, args?: unknown): Promise<T> {
-  const target = (args as { target?: unknown } | undefined)?.target;
+  const { target, playerUid } = (args ?? {}) as {
+    target?: unknown;
+    playerUid?: unknown;
+  };
+  const suffix = typeof playerUid === "string" ? `__player_${playerUid}` : "";
 
   if (typeof target === "string") {
-    const pairs = await load<T>(`${cmd}__${target}`);
+    const pairs = await load<T>(`${cmd}__${target}${suffix}`);
     return pairs ?? ([] as unknown as T);
   }
 
-  const fixture = await load<T>(cmd);
-  if (fixture === null) throw new Error(`no fixture for ${cmd}`);
+  const fixture = await load<T>(`${cmd}${suffix}`);
+  if (fixture === null) throw new Error(`no fixture for ${cmd}${suffix}`);
   return fixture;
 }
 

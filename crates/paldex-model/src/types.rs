@@ -165,6 +165,33 @@ pub struct MiscCounters {
     pub tribe_capture_count: u32,
 }
 
+/// Captures of one species needed to complete its capture bonus, and equally
+/// the highest value `PlayerProgress::capture_bonus_tiers` ever takes.
+///
+/// Not stated by any `DataTable` in the game pak — derived from a real save,
+/// where the tier is exactly `min(capture_count, 5)` across 529 species
+/// observations with no exception, and corroborated by the pak's own UI
+/// strings, which tier the capture EXP bonus at `_001`, `_005`, `_COMPLETE`.
+pub const CAPTURE_BONUS_AT: u32 = 5;
+
+/// Who a player *is*, from their in-world character entry in
+/// `CharacterSaveParameterMap` — the only place the save writes a player's
+/// name. [`PlayerProgress`] holds what they have *done*, and the two join on
+/// [`uid`](PlayerIdentity::uid).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlayerIdentity {
+    /// `PlayerUId`, matching `PlayerProgress::player_uid`. Note this is not
+    /// the same byte order as the `Players/<uid>.sav` filename.
+    pub uid: Uuid,
+    /// The player character's own `InstanceId`, which is *not* a Pal instance
+    /// id — player characters are excluded from the roster.
+    pub instance_id: Uuid,
+    /// `NickName`. `None` for a nameless character, which shouldn't happen but
+    /// is not worth failing a whole save over.
+    pub name: Option<String>,
+    pub level: u8,
+}
+
 /// A player's meta-progression, from their own `Players/<uid>.sav` —
 /// distinct from their in-world `Pal`-shaped character entry in
 /// `CharacterSaveParameterMap` (see [`Pal`] and the `character` decoder).
@@ -174,10 +201,17 @@ pub struct PlayerProgress {
     /// `PaldeckUnlockFlag` — authoritative dex completion. Deliberately not
     /// inferred from currently-owned Pals: releasing a Pal must not un-catch it.
     pub paldeck_unlocked: HashSet<String>,
-    /// `PalCaptureCount` — per-species capture count, toward the 10-capture bonus.
+    /// `PalCaptureCount` — per-species capture count, toward that species'
+    /// capture bonus. Per player: two players' counts are independent and must
+    /// never be pooled.
     pub capture_counts: HashMap<String, u32>,
-    /// `PalCaptureBonusCount` — whether the 10-capture bonus was claimed per species.
-    pub capture_bonus_claimed: HashSet<String>,
+    /// `PalCaptureBonusCount` — per-species capture-bonus tier, 1..=5.
+    ///
+    /// Despite the name this is a *tier*, not a count of bonuses and not a
+    /// boolean: it is `min(capture_count, 5)`, so tier 5 means the bonus is
+    /// complete and further captures add nothing. Verified against a real save
+    /// — see `capture_bonus_tier_is_capture_count_capped_at_five`.
+    pub capture_bonus_tiers: HashMap<String, u32>,
     /// `UnlockedRecipeTechnologyNames`.
     pub unlocked_tech: Vec<String>,
     pub tech_points: u32,

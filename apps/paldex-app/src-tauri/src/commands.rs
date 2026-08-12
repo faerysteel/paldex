@@ -348,10 +348,16 @@ pub fn force_resync(app: AppHandle, state: State<AppState>) -> Result<SnapshotSu
 ///
 /// A display-ready message if no world is selected, or the query fails.
 #[tauri::command(async)]
-pub fn pal_roster(app: AppHandle, state: State<AppState>) -> Result<Vec<PalView>, String> {
+pub fn pal_roster(
+    app: AppHandle,
+    state: State<AppState>,
+    player_uid: Option<String>,
+) -> Result<Vec<PalView>, String> {
     eprintln!("[paldex] pal_roster: start");
     let snapshot_id = selected_snapshot_id(&state)?;
-    let mut roster = with_store(&app, &state, |store| queries::pal_roster(store, snapshot_id))?;
+    let scope = player_scope(player_uid.as_deref());
+    let mut roster =
+        with_store(&app, &state, |store| queries::pal_roster(store, snapshot_id, scope))?;
 
     if let Some(reference) = state.reference() {
         enrich_roster(&mut roster, reference);
@@ -522,18 +528,27 @@ pub fn reference_status(state: State<AppState>) -> ReferenceStatusView {
     }
 }
 
-/// The currently selected world's dex progress (species unlocked by any
-/// player in the world).
+/// The currently selected world's dex progress, for one player or for the
+/// world as a whole.
+///
+/// `player_uid` of `None` means every player aggregated — see
+/// [`queries::PlayerScope`] for why that is a deliberate choice rather than
+/// the natural default.
 ///
 /// # Errors
 ///
 /// A display-ready message if no world is selected, or the query fails.
 #[tauri::command(async)]
-pub fn dex_progress(app: AppHandle, state: State<AppState>) -> Result<DexProgressView, String> {
+pub fn dex_progress(
+    app: AppHandle,
+    state: State<AppState>,
+    player_uid: Option<String>,
+) -> Result<DexProgressView, String> {
     let world_id = selected_world_id(&state)?;
     let snapshot_id = selected_snapshot_id(&state)?;
+    let scope = player_scope(player_uid.as_deref());
     let facts = with_store(&app, &state, |store| {
-        queries::dex_facts(store, &world_id, snapshot_id)
+        queries::dex_facts(store, &world_id, snapshot_id, scope)
     })?;
 
     Ok(match state.reference() {
@@ -556,17 +571,22 @@ fn dex_with_reference(facts: &queries::DexFacts, index: &ReferenceIndex) -> DexP
 
     let caught: std::collections::HashSet<String> =
         facts.unlocked.iter().filter_map(|id| canonical(id)).collect();
-    let bonus: std::collections::HashSet<String> =
-        facts.bonus_claimed.iter().filter_map(|id| canonical(id)).collect();
 
-    let mut counts: HashMap<String, i64> = HashMap::new();
-    for (save_id, count) in &facts.capture_counts {
-        if let Some(key) = canonical(save_id) {
-            // Variants fold into the base species, so keep the best.
-            let slot = counts.entry(key).or_insert(0);
-            *slot = (*slot).max(*count);
+    // Variants fold into the base species, so keep the best of each. This is
+    // a *within-player* fold across spellings and alpha/predator forms, not
+    // the cross-player pooling `PlayerScope` exists to prevent.
+    let fold = |source: &HashMap<String, i64>| {
+        let mut out: HashMap<String, i64> = HashMap::new();
+        for (save_id, value) in source {
+            if let Some(key) = canonical(save_id) {
+                let slot = out.entry(key).or_insert(0);
+                *slot = (*slot).max(*value);
+            }
         }
-    }
+        out
+    };
+    let counts = fold(&facts.capture_counts);
+    let bonus = fold(&facts.bonus_tiers);
 
     // Only species with a Paldeck number are Paldeck entries. Tower bosses,
     // raid/collab content, and unused entries are excluded here for the same
@@ -581,7 +601,7 @@ fn dex_with_reference(facts: &queries::DexFacts, index: &ReferenceIndex) -> DexP
         .map(|species| queries::DexEntryView {
             caught: caught.contains(&species.character_id),
             capture_count: counts.get(&species.character_id).copied().unwrap_or(0),
-            bonus_claimed: bonus.contains(&species.character_id),
+            bonus_tier: bonus.get(&species.character_id).copied().unwrap_or(0),
             character_id: species.character_id.clone(),
             display_name: species.display_name.clone(),
             dex_label: species.dex_label(),
@@ -632,7 +652,7 @@ fn dex_without_reference(facts: &queries::DexFacts) -> DexProgressView {
             dex_label: None,
             caught: true,
             capture_count: facts.capture_counts.get(id).copied().unwrap_or(0),
-            bonus_claimed: facts.bonus_claimed.contains(id),
+            bonus_tier: facts.bonus_tiers.get(id).copied().unwrap_or(0),
             // No pak means no parameter table, so none of these are knowable.
             elements: Vec::new(),
             rarity: 0,
@@ -648,6 +668,31 @@ fn dex_without_reference(facts: &queries::DexFacts) -> DexProgressView {
         total_species_count: 0,
         entries,
     }
+}
+
+/// Turn the frontend's optional uid into a [`queries::PlayerScope`].
+///
+/// An absent or empty uid is "all players": the selector's own default, and
+/// what a single-player world always resolves to.
+fn player_scope(player_uid: Option<&str>) -> queries::PlayerScope<'_> {
+    match player_uid {
+        Some(uid) if !uid.is_empty() => queries::PlayerScope::Only(uid),
+        _ => queries::PlayerScope::All,
+    }
+}
+
+/// Who is in the currently selected world, for the player selector.
+///
+/// # Errors
+///
+/// A display-ready message if no world is selected, or the query fails.
+#[tauri::command]
+pub fn world_players(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<Vec<queries::WorldPlayerView>, String> {
+    let snapshot_id = selected_snapshot_id(&state)?;
+    with_store(&app, &state, |store| queries::world_players(store, snapshot_id))
 }
 
 /// Per-player progression for the currently selected world's latest snapshot.
@@ -682,9 +727,11 @@ pub fn base_summary(app: AppHandle, state: State<AppState>) -> Result<Vec<BaseCa
 fn analysis_roster(
     app: &AppHandle,
     state: &State<AppState>,
+    scope: queries::PlayerScope,
 ) -> Result<(Vec<PalView>, Vec<paldex_model::Pal>), String> {
     let snapshot_id = selected_snapshot_id(state)?;
-    let mut views = with_store(app, state, |store| queries::pal_roster(store, snapshot_id))?;
+    let mut views =
+        with_store(app, state, |store| queries::pal_roster(store, snapshot_id, scope))?;
     if let Some(reference) = state.reference() {
         enrich_roster(&mut views, reference);
     }
@@ -747,8 +794,12 @@ fn to_model_pal(view: &PalView) -> Option<paldex_model::Pal> {
 ///
 /// A display-ready message if no world is selected, or the query fails.
 #[tauri::command(async)]
-pub fn pal_quality(app: AppHandle, state: State<AppState>) -> Result<queries::PalQualityView, String> {
-    let (views, pals) = analysis_roster(&app, &state)?;
+pub fn pal_quality(
+    app: AppHandle,
+    state: State<AppState>,
+    player_uid: Option<String>,
+) -> Result<queries::PalQualityView, String> {
+    let (views, pals) = analysis_roster(&app, &state, player_scope(player_uid.as_deref()))?;
     Ok(quality_view(&views, &pals))
 }
 
@@ -833,8 +884,9 @@ pub fn breeding_options(
     app: AppHandle,
     state: State<AppState>,
     target: String,
+    player_uid: Option<String>,
 ) -> Result<Vec<queries::BreedingPairView>, String> {
-    let (views, pals) = analysis_roster(&app, &state)?;
+    let (views, pals) = analysis_roster(&app, &state, player_scope(player_uid.as_deref()))?;
     let Some(reference) = state.reference() else {
         eprintln!("[paldex] breeding_options: no reference data (no pak found)");
         return Ok(Vec::new());
@@ -968,8 +1020,9 @@ pub fn unowned_breeding_options(
     app: AppHandle,
     state: State<AppState>,
     target: String,
+    player_uid: Option<String>,
 ) -> Result<Vec<queries::UnownedPairingView>, String> {
-    let (views, pals) = analysis_roster(&app, &state)?;
+    let (views, pals) = analysis_roster(&app, &state, player_scope(player_uid.as_deref()))?;
     let Some(reference) = state.reference() else {
         eprintln!("[paldex] unowned_breeding_options: no reference data (no pak found)");
         return Ok(Vec::new());
@@ -1091,7 +1144,7 @@ mod tests {
         let mut store = Store::open_in_memory().ok()?;
         let snapshot_id = crate::sync::sync_world(&mut store, &world).ok()?;
         Some((
-            queries::pal_roster(&store, snapshot_id).ok()?,
+            queries::pal_roster(&store, snapshot_id, queries::PlayerScope::All).ok()?,
             queries::player_flags_detail(&store, snapshot_id).ok()?,
         ))
     }
@@ -1178,7 +1231,8 @@ mod tests {
         };
         let mut store = Store::open_in_memory().expect("store");
         let snapshot_id = crate::sync::sync_world(&mut store, &world).expect("sync");
-        let facts = queries::dex_facts(&store, &world.id, snapshot_id).expect("dex_facts");
+        let facts = queries::dex_facts(&store, &world.id, snapshot_id, queries::PlayerScope::All)
+            .expect("dex_facts");
 
         let view = dex_with_reference(&facts, &loaded.index);
         eprintln!(
@@ -1223,6 +1277,137 @@ mod tests {
         assert!(
             view.entries.iter().all(|e| !e.display_name.is_empty()),
             "every tile needs a label"
+        );
+    }
+
+    /// Capture progress is per player, and scoping to one must report *that
+    /// player's* numbers rather than the world's best.
+    ///
+    /// The bug this replaces: `dex_facts` aggregated with
+    /// `MAX(value) GROUP BY flag_key` and no `player_uid`, so a species one
+    /// player had caught many times and the other had never caught read as 447
+    /// for both. On the save this was written against that inflated the
+    /// bonus-complete count from different totals to a an inflated shared total.
+    #[test]
+    fn per_player_dex_facts_are_not_pooled_across_players() {
+        let Some(world) = crate::sync::tests::real_trackable_world() else {
+            eprintln!("skipping: need a real save");
+            return;
+        };
+        let mut store = Store::open_in_memory().expect("store");
+        let snapshot_id = crate::sync::sync_world(&mut store, &world).expect("sync");
+
+        let players = queries::world_players(&store, snapshot_id).expect("world_players");
+        if players.len() < 2 {
+            eprintln!("skipping: needs a world with at least two players");
+            return;
+        }
+
+        let all = queries::dex_facts(&store, &world.id, snapshot_id, queries::PlayerScope::All)
+            .expect("all");
+        let per_player: Vec<_> = players
+            .iter()
+            .map(|p| {
+                queries::dex_facts(
+                    &store,
+                    &world.id,
+                    snapshot_id,
+                    queries::PlayerScope::Only(&p.player_uid),
+                )
+                .expect("scoped")
+            })
+            .collect();
+
+        // Every scoped count must be one this player actually has, and the
+        // aggregate must be the best of them — never more, never less.
+        for (species, pooled) in &all.capture_counts {
+            let best = per_player
+                .iter()
+                .filter_map(|f| f.capture_counts.get(species))
+                .copied()
+                .max()
+                .unwrap_or(0);
+            assert_eq!(
+                *pooled, best,
+                "{species}: All reported {pooled} but no single player has more than {best}"
+            );
+        }
+
+        // The point of the fix: at least one species where the players differ,
+        // proving the scoping is actually doing something on this save.
+        let divergent = all
+            .capture_counts
+            .keys()
+            .filter(|species| {
+                let counts: Vec<i64> = per_player
+                    .iter()
+                    .map(|f| f.capture_counts.get(*species).copied().unwrap_or(0))
+                    .collect();
+                counts.iter().min() != counts.iter().max()
+            })
+            .count();
+        eprintln!(
+            "{} of {} species differ between players",
+            divergent,
+            all.capture_counts.len()
+        );
+        assert!(
+            divergent > 0,
+            "two players with identical capture counts for every species means \
+             the scoping is not filtering at all"
+        );
+
+        // And the headline number the dex screen shows really is per player.
+        for (player, facts) in players.iter().zip(&per_player) {
+            let complete = facts
+                .capture_counts
+                .values()
+                .filter(|c| **c >= i64::from(paldex_model::CAPTURE_BONUS_AT))
+                .count();
+            eprintln!("{:?}: {complete} species at the capture bonus", player.name);
+        }
+    }
+
+    /// The roster's player filter joins on `pals.owner`. Scoping must partition
+    /// the roster, with unowned base-camp workers reachable only via `All`.
+    #[test]
+    fn per_player_roster_partitions_by_owner() {
+        let Some(world) = crate::sync::tests::real_trackable_world() else {
+            eprintln!("skipping: need a real save");
+            return;
+        };
+        let mut store = Store::open_in_memory().expect("store");
+        let snapshot_id = crate::sync::sync_world(&mut store, &world).expect("sync");
+
+        let players = queries::world_players(&store, snapshot_id).expect("world_players");
+        let all = queries::pal_roster(&store, snapshot_id, queries::PlayerScope::All).expect("all");
+
+        let mut scoped_total = 0;
+        for p in &players {
+            let mine = queries::pal_roster(
+                &store,
+                snapshot_id,
+                queries::PlayerScope::Only(&p.player_uid),
+            )
+            .expect("scoped");
+            assert!(
+                mine.iter().all(|pal| pal.owner.as_deref() == Some(p.player_uid.as_str())),
+                "a scoped roster must contain only that player's Pals"
+            );
+            eprintln!("{:?}: {} pals", p.name, mine.len());
+            scoped_total += mine.len();
+        }
+
+        let unowned = all.iter().filter(|p| p.owner.is_none()).count();
+        eprintln!("{} pals total, {unowned} unowned", all.len());
+        assert_eq!(
+            scoped_total + unowned,
+            all.len(),
+            "every Pal belongs to exactly one player, or to none"
+        );
+        assert!(
+            unowned > 0,
+            "base-camp workers have no owner; if this is 0 the fixture changed"
         );
     }
 
@@ -1928,7 +2113,7 @@ mod tests {
         let derived = crate::sync::tests::real_trackable_world().and_then(|world| {
             let mut store = Store::open_in_memory().ok()?;
             let snapshot_id = crate::sync::sync_world(&mut store, &world).ok()?;
-            let facts = queries::dex_facts(&store, &world.id, snapshot_id).ok()?;
+            let facts = queries::dex_facts(&store, &world.id, snapshot_id, queries::PlayerScope::All).ok()?;
             let players = queries::player_progress(&store, snapshot_id).ok()?;
             let summary = queries::snapshot_summary(&store, snapshot_id).ok()?;
             Some((dex_with_reference(&facts, &loaded.index), players, summary))
@@ -2062,7 +2247,113 @@ mod tests {
                 dex.unlocked_species_count, dex.total_species_count
             );
         }
+
+        // The player selector. Off by default: every screen is per player, so
+        // an honest per-player preview means re-capturing the per-target
+        // breeding dump once per player, which multiplies an already ~34 MB,
+        // ~3 minute capture by the player count. Without the flag the harness
+        // gets an empty player list, so the selector doesn't render and the
+        // preview shows the world-level view — the same thing the real app
+        // shows for a single-player world, rather than a selector whose
+        // options all resolve to the same fixtures.
+        let players = std::env::var("PALDEX_FIXTURE_PLAYERS").is_ok();
+        let world_players = if players {
+            crate::sync::tests::real_trackable_world()
+                .and_then(|world| {
+                    let mut store = Store::open_in_memory().ok()?;
+                    let snapshot_id = crate::sync::sync_world(&mut store, &world).ok()?;
+                    let listed = queries::world_players(&store, snapshot_id).ok()?;
+                    for p in &listed {
+                        dump_for_player(&write, &world, snapshot_id, p, &loaded)?;
+                    }
+                    Some(listed)
+                })
+                .unwrap_or_default()
+        } else {
+            eprintln!("fixture: player selector omitted (set PALDEX_FIXTURE_PLAYERS=1 to capture it)");
+            Vec::new()
+        };
+        write("world_players", serde_json::to_value(&world_players).unwrap());
+
         eprintln!("fixture: {pal_count} pals, {} icons -> {out}", species.len());
+    }
+
+    /// Everything the four tabs request for one selected player, under the
+    /// `__player_<uid>` suffix `preview/mock-core.ts` looks for.
+    fn dump_for_player(
+        write: &impl Fn(&str, serde_json::Value),
+        world: &paldex_locate::World,
+        snapshot_id: i64,
+        player: &queries::WorldPlayerView,
+        loaded: &LoadedReference,
+    ) -> Option<()> {
+        let mut store = Store::open_in_memory().ok()?;
+        let snapshot_id_check = crate::sync::sync_world(&mut store, world).ok()?;
+        debug_assert_eq!(snapshot_id, snapshot_id_check);
+
+        let uid = &player.player_uid;
+        let scope = queries::PlayerScope::Only(uid);
+        let suffix = format!("__player_{uid}");
+
+        let facts = queries::dex_facts(&store, &world.id, snapshot_id_check, scope).ok()?;
+        write(
+            &format!("dex_progress{suffix}"),
+            serde_json::to_value(dex_with_reference(&facts, &loaded.index)).unwrap(),
+        );
+
+        let mut roster = queries::pal_roster(&store, snapshot_id_check, scope).ok()?;
+        enrich_roster(&mut roster, &loaded.index);
+        let pals: Vec<paldex_model::Pal> = roster.iter().filter_map(to_model_pal).collect();
+        let views: Vec<PalView> = roster
+            .into_iter()
+            .filter(|v| uuid::Uuid::parse_str(&v.instance_id).is_ok())
+            .collect();
+        write(&format!("pal_roster{suffix}"), serde_json::to_value(&views).unwrap());
+        write(
+            &format!("pal_quality{suffix}"),
+            serde_json::to_value(quality_view(&views, &pals)).unwrap(),
+        );
+
+        // Breeding is per target *and* per player, which is the combination
+        // that makes this capture expensive. Only targets this player's own
+        // roster can reach get a file; the rest resolve to the empty list, as
+        // in the unscoped case.
+        let mut owned: Vec<&str> = pals.iter().map(|p| p.character_id.as_str()).collect();
+        owned.sort_unstable();
+        owned.dedup();
+        let mut targets: Vec<String> = owned
+            .iter()
+            .enumerate()
+            .flat_map(|(i, a)| {
+                owned[i..]
+                    .iter()
+                    .filter_map(|b| loaded.index.breeding_result(a, b).map(str::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        targets.sort();
+        targets.dedup();
+        for target in &targets {
+            let pairs = breeding_view(&views, &pals, target, &loaded.index);
+            write(
+                &format!("breeding_options__{target}{suffix}"),
+                serde_json::to_value(&pairs).unwrap(),
+            );
+            let pairings = unowned_view(&views, &pals, target, &loaded.index);
+            if !pairings.is_empty() {
+                write(
+                    &format!("unowned_breeding_options__{target}{suffix}"),
+                    serde_json::to_value(&pairings).unwrap(),
+                );
+            }
+        }
+        eprintln!(
+            "fixture: player {:?} -> {} pals, {} breeding targets",
+            player.name,
+            views.len(),
+            targets.len()
+        );
+        Some(())
     }
 
     /// Icons must survive the whole app-layer path: pak -> decode -> PNG ->

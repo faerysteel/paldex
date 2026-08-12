@@ -6,9 +6,13 @@
 //! stats. See `paldex-gvas-rawdata-nesting` (memory) for how this was found.
 //!
 //! Players have an in-world character entry in this same map (`IsPlayer: true`)
-//! sharing most of the same fields — these are skipped from the roster; their
-//! real progression data lives in a separate `Players/<uid>.sav` file, decoded
-//! by the `player` module.
+//! sharing most of the same fields — these are kept out of the roster, but
+//! they are the only place the player's *name* is written down, so they are
+//! decoded into [`PlayerIdentity`] rather than merely counted. Their real
+//! progression data lives in a separate `Players/<uid>.sav` file, decoded by
+//! the `player` module; the `PlayerUId` on this map's key is the same value
+//! that file's `SaveData.PlayerUId` carries, which is what lets the two be
+//! joined.
 
 use paldex_gvas::{StructValue, Value};
 use uuid::Uuid;
@@ -17,7 +21,7 @@ use crate::gvas_ext::{
     find, find_byte, find_container_id, find_enum, find_enum_array, find_guid, find_name_array,
     find_str, struct_properties,
 };
-use crate::types::{Gender, Ivs, Pal, PalLocation, PalLocationKind, SoulUpgrades};
+use crate::types::{Gender, Ivs, Pal, PalLocation, PalLocationKind, PlayerIdentity, SoulUpgrades};
 
 /// The result of decoding `CharacterSaveParameterMap`.
 ///
@@ -27,10 +31,18 @@ use crate::types::{Gender, Ivs, Pal, PalLocation, PalLocationKind, SoulUpgrades}
 #[derive(Debug, Default)]
 pub struct CharacterMapResult {
     pub pals: Vec<Pal>,
-    /// Count of entries classified as the player's own in-world character
+    /// Entries classified as a player's own in-world character
     /// (`IsPlayer: true`). Not included in `pals` — see module docs.
-    pub player_count: usize,
+    pub players: Vec<PlayerIdentity>,
     pub warnings: Vec<String>,
+}
+
+impl CharacterMapResult {
+    /// How many player characters this map held.
+    #[must_use]
+    pub fn player_count(&self) -> usize {
+        self.players.len()
+    }
 }
 
 /// Decode every entry of a `CharacterSaveParameterMap`'s `Value::Map`.
@@ -41,7 +53,7 @@ pub fn decode_character_map(entries: &[(Value, Value)]) -> CharacterMapResult {
     for (key, value) in entries {
         match decode_entry(key, value) {
             Ok(Classified::Pal(pal)) => result.pals.push(pal),
-            Ok(Classified::Player) => result.player_count += 1,
+            Ok(Classified::Player(identity)) => result.players.push(identity),
             Err(reason) => result.warnings.push(reason),
         }
     }
@@ -51,7 +63,7 @@ pub fn decode_character_map(entries: &[(Value, Value)]) -> CharacterMapResult {
 
 enum Classified {
     Pal(Pal),
-    Player,
+    Player(PlayerIdentity),
 }
 
 fn decode_entry(key: &Value, value: &Value) -> Result<Classified, String> {
@@ -75,7 +87,21 @@ fn decode_entry(key: &Value, value: &Value) -> Result<Classified, String> {
     };
 
     if matches!(find(save_param, "IsPlayer"), Some(Value::Bool(true))) {
-        return Ok(Classified::Player);
+        // The uid lives on the map *key*, not in `SaveParameter` — the value
+        // side has no field naming which player this character is.
+        let uid = find_guid(key_props, "PlayerUId")
+            .filter(|g| !g.is_nil())
+            .ok_or_else(|| format!("player entry {instance_id} has no PlayerUId on its key"))?;
+        return Ok(Classified::Player(PlayerIdentity {
+            uid,
+            instance_id,
+            // `FilteredNickName` is the profanity-filtered variant; the raw
+            // `NickName` is what the player set and what the game shows them.
+            name: find_str(save_param, "NickName")
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned),
+            level: find_byte(save_param, "Level").unwrap_or(1),
+        }));
     }
 
     Ok(Classified::Pal(build_pal(instance_id, save_param)))

@@ -61,7 +61,7 @@ fn every_entry_classifies_with_no_warnings() {
     eprintln!(
         "{} pals, {} players, {} warnings",
         result.pals.len(),
-        result.player_count,
+        result.player_count(),
         result.warnings.len()
     );
     for w in &result.warnings {
@@ -74,7 +74,7 @@ fn every_entry_classifies_with_no_warnings() {
         "every entry should classify as Pal or Player — see warnings above"
     );
     assert_eq!(
-        result.pals.len() + result.player_count,
+        result.pals.len() + result.player_count(),
         entries.len(),
         "pals + players should account for every map entry"
     );
@@ -146,7 +146,64 @@ fn player_count_matches_a_real_player_character() {
     let result = decode_character_map(&entries);
 
     // At least the host has an in-world character entry.
-    assert!(result.player_count >= 1);
+    assert!(result.player_count() >= 1);
+}
+
+/// The world save is the only place a player's *name* is written down, and
+/// the player selector has nothing to show without it. A player entry that
+/// decoded to a bare uid would still satisfy `player_count`, so assert on the
+/// identity fields specifically.
+#[test]
+fn player_entries_carry_a_usable_identity() {
+    let entries = require_real_entries!();
+    let result = decode_character_map(&entries);
+
+    for player in &result.players {
+        eprintln!("player {} -> {:?} (Lv {})", player.uid, player.name, player.level);
+        assert!(!player.uid.is_nil(), "a player entry decoded to a nil uid");
+        assert!(
+            player.name.as_ref().is_none_or(|n| !n.is_empty()),
+            "an empty NickName should decode to None, not to an empty string"
+        );
+    }
+
+    assert!(
+        result.players.iter().any(|p| p.name.is_some()),
+        "expected at least one named player in a real save"
+    );
+
+    // Two characters sharing a uid would make the selector ambiguous and the
+    // owner filter wrong.
+    let mut uids: Vec<_> = result.players.iter().map(|p| p.uid).collect();
+    uids.sort_unstable();
+    let before = uids.len();
+    uids.dedup();
+    assert_eq!(before, uids.len(), "player uids must be unique");
+}
+
+/// Every Pal's `owner`, when set, must name a player this same map decoded —
+/// the roster's player filter joins on exactly this, and an owner pointing at
+/// nobody would silently filter to an empty list.
+#[test]
+fn pal_owners_resolve_to_a_decoded_player() {
+    let entries = require_real_entries!();
+    let result = decode_character_map(&entries);
+
+    let known: std::collections::HashSet<_> = result.players.iter().map(|p| p.uid).collect();
+    let orphaned = result
+        .pals
+        .iter()
+        .filter(|p| p.owner.is_some_and(|o| !known.contains(&o)))
+        .count();
+    let unowned = result.pals.iter().filter(|p| p.owner.is_none()).count();
+
+    eprintln!(
+        "{} pals: {} unowned (base workers), {} orphaned",
+        result.pals.len(),
+        unowned,
+        orphaned
+    );
+    assert_eq!(orphaned, 0, "every owned Pal should name a player in this world");
 }
 
 #[test]

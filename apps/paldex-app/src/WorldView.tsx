@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import type { SnapshotSummaryView } from "./types";
+import type { SnapshotSummaryView, WorldPlayerView } from "./types";
 import { relativeTime } from "./time";
 import Roster from "./Roster";
 import Dex from "./Dex";
@@ -45,6 +45,27 @@ export default function WorldView({ summary, onBack, onSummaryChange }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [resyncing, setResyncing] = useState(false);
   const [lastAutoSync, setLastAutoSync] = useState<number | null>(null);
+  const [players, setPlayers] = useState<WorldPlayerView[]>([]);
+  // `null` is "all players". Lives here rather than in a tab for the same
+  // reason the sync listener does: switching tabs must not reset it, and the
+  // whole point of the selector is that it applies across screens.
+  const [playerUid, setPlayerUid] = useState<string | null>(null);
+
+  // Re-fetched on every snapshot: a player who joins the world mid-session
+  // should appear without a restart.
+  useEffect(() => {
+    invoke<WorldPlayerView[]>("world_players")
+      .then(setPlayers)
+      .catch((e: unknown) => setError(String(e)));
+  }, [summary.snapshotId]);
+
+  // A selected player who is no longer in the world would silently filter
+  // everything down to nothing, so fall back to all players.
+  useEffect(() => {
+    if (playerUid !== null && !players.some((p) => p.playerUid === playerUid)) {
+      setPlayerUid(null);
+    }
+  }, [players, playerUid]);
 
   useEffect(() => {
     const pending = listen<SnapshotSummaryView>(SNAPSHOT_EVENT, (event) => {
@@ -95,6 +116,22 @@ export default function WorldView({ summary, onBack, onSummaryChange }: Props) {
           </p>
         </div>
         <div className="actions">
+          {players.length > 1 && (
+            <label className="player-picker">
+              <span className="muted">Player</span>
+              <select
+                value={playerUid ?? ""}
+                onChange={(e) => setPlayerUid(e.target.value || null)}
+              >
+                <option value="">All players</option>
+                {players.map((p) => (
+                  <option key={p.playerUid} value={p.playerUid}>
+                    {playerLabel(p)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <button className="btn" onClick={() => void resync()} disabled={resyncing}>
             {resyncing ? "Syncing…" : "Resync"}
           </button>
@@ -118,10 +155,16 @@ export default function WorldView({ summary, onBack, onSummaryChange }: Props) {
 
       {error && <p className="notice">{error}</p>}
 
-      {tab === "dex" && <Dex summary={summary} />}
-      {tab === "roster" && <Roster summary={summary} />}
-      {tab === "analysis" && <Analysis summary={summary} />}
-      {tab === "breeding" && <Breeding summary={summary} />}
+      {tab === "dex" && <Dex summary={summary} playerUid={playerUid} />}
+      {tab === "roster" && <Roster summary={summary} playerUid={playerUid} />}
+      {tab === "analysis" && <Analysis summary={summary} playerUid={playerUid} />}
+      {tab === "breeding" && <Breeding summary={summary} playerUid={playerUid} />}
     </div>
   );
+}
+
+/** A player's name, falling back to a short uid when the save didn't name them. */
+function playerLabel(p: WorldPlayerView): string {
+  const name = p.name ?? `${p.playerUid.slice(0, 8)}…`;
+  return p.level === null ? name : `${name} (Lv ${p.level})`;
 }

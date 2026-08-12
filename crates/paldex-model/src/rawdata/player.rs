@@ -33,7 +33,9 @@ pub fn decode_player(root: &paldex_gvas::Root) -> Result<PlayerProgress, String>
         player_uid,
         paldeck_unlocked: find_map_true_keys(record, "PaldeckUnlockFlag"),
         capture_counts: find_map_int(record, "PalCaptureCount"),
-        capture_bonus_claimed: find_map_true_keys(record, "PalCaptureBonusCount"),
+        // A `Map<Name, Int>` tier, not a bool set — reading it with
+        // `find_map_true_keys` silently yielded an always-empty set.
+        capture_bonus_tiers: find_map_int(record, "PalCaptureBonusCount"),
         unlocked_tech: find_name_array(save_data, "UnlockedRecipeTechnologyNames"),
         tech_points: u32_or_zero(find_int(save_data, "TechnologyPoint")),
         boss_tech_points: u32_or_zero(find_int(save_data, "bossTechnologyPoint")),

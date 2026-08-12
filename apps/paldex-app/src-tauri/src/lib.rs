@@ -19,6 +19,7 @@ pub fn run() {
             commands::pal_roster,
             commands::dex_progress,
             commands::player_progress,
+            commands::world_players,
             commands::base_summary,
             commands::player_flags_detail,
             commands::pal_quality,

@@ -28,6 +28,8 @@ const LISTS: { id: List; label: string; hint: string }[] = [
 
 interface Props {
   summary: SnapshotSummaryView;
+  /** Whose Pals to grade; `null` is every player. */
+  playerUid: string | null;
 }
 
 /**
@@ -40,7 +42,7 @@ interface Props {
  * the tier it falls in, and the passives a pairing would draw from are all on
  * screen next to the suggestion they produced.
  */
-export default function Analysis({ summary }: Props) {
+export default function Analysis({ summary, playerUid }: Props) {
   const [quality, setQuality] = useState<PalQualityView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [list, setList] = useState<List>("graded");
@@ -50,11 +52,11 @@ export default function Analysis({ summary }: Props) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      setQuality(await invoke<PalQualityView>("pal_quality"));
+      setQuality(await invoke<PalQualityView>("pal_quality", { playerUid }));
     } catch (e) {
       setError(String(e));
     }
-  }, []);
+  }, [playerUid]);
 
   useEffect(() => {
     void load();

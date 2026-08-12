@@ -25,9 +25,11 @@ type SortColumn = "characterId" | "level" | "ivAvg" | "rank" | "rarity";
 
 interface Props {
   summary: SnapshotSummaryView;
+  /** Whose Pals to list; `null` is every player, plus unowned base workers. */
+  playerUid: string | null;
 }
 
-export default function Roster({ summary }: Props) {
+export default function Roster({ summary, playerUid }: Props) {
   const [pals, setPals] = useState<PalView[] | null>(null);
   const [players, setPlayers] = useState<PlayerProgressView[] | null>(null);
   const [playerFlags, setPlayerFlags] = useState<PlayerFlagsView[] | null>(null);
@@ -44,7 +46,7 @@ export default function Roster({ summary }: Props) {
     try {
       console.info("[paldex] roster: requesting data");
       const [palsResult, playersResult, flagsResult] = await Promise.all([
-        invoke<PalView[]>("pal_roster"),
+        invoke<PalView[]>("pal_roster", { playerUid }),
         invoke<PlayerProgressView[]>("player_progress"),
         invoke<PlayerFlagsView[]>("player_flags_detail"),
       ]);
@@ -55,7 +57,7 @@ export default function Roster({ summary }: Props) {
     } catch (e) {
       setError(String(e));
     }
-  }, []);
+  }, [playerUid]);
 
   useEffect(() => {
     void load();

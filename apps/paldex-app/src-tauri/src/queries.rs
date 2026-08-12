@@ -4,6 +4,48 @@
 use paldex_store::Store;
 use serde::Serialize;
 
+/// Whose progress a query reports.
+///
+/// An explicit type rather than an `Option<&str>` because the two cases are
+/// not "filter or don't": most of what the game tracks — capture counts,
+/// capture bonuses, tech, quests — is *per player*, and silently aggregating
+/// it across a shared world invents a player who has everyone's progress at
+/// once. That is exactly the bug this type exists to make hard to write: the
+/// dex screen used to report `MAX(capture_count)` across players, which
+/// claimed too many species were at their capture bonus in a world where the two
+/// players were individually at different totals.
+///
+/// [`All`](PlayerScope::All) is still right for genuinely world-level
+/// questions — "has anyone here caught this species" — so it stays available,
+/// but naming it forces the choice at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerScope<'a> {
+    /// Every player in the world, aggregated.
+    All,
+    /// One player, by `player_uid`.
+    Only(&'a str),
+}
+
+impl<'a> PlayerScope<'a> {
+    /// The uid to bind, when this scope narrows to one player.
+    #[must_use]
+    pub fn uid(self) -> Option<&'a str> {
+        match self {
+            Self::All => None,
+            Self::Only(uid) => Some(uid),
+        }
+    }
+
+    /// The extra `AND player_uid = ?n` clause this scope needs, bound to the
+    /// caller's next free parameter index.
+    fn clause(self, index: usize) -> String {
+        match self {
+            Self::All => String::new(),
+            Self::Only(_) => format!(" AND player_uid = ?{index}"),
+        }
+    }
+}
+
 /// One of a species' elements, carrying both the internal enum name and the
 /// label the game shows. The id travels alongside the name because the UI
 /// colours a chip by element and must not key that off localized text.
@@ -112,10 +154,14 @@ pub struct DexEntryView {
     /// From `PaldeckUnlockFlag`, so releasing or butchering a Pal never
     /// un-catches it — `dex_events` is append-only.
     pub caught: bool,
-    /// Best `PalCaptureCount` across players, toward the 10-capture bonus.
+    /// `PalCaptureCount` for the selected player, or the best across players
+    /// under [`PlayerScope::All`].
     pub capture_count: i64,
-    /// Whether any player has claimed this species' 10-capture bonus.
-    pub bonus_claimed: bool,
+    /// This species' capture-bonus tier, 0..=[`CAPTURE_BONUS_AT`], where 0 is
+    /// "never caught" and `CAPTURE_BONUS_AT` is "bonus complete".
+    ///
+    /// [`CAPTURE_BONUS_AT`]: paldex_model::CAPTURE_BONUS_AT
+    pub bonus_tier: i64,
     /// Elements, rarity, base stats and work suitabilities as
     /// `DT_PalMonsterParameter` authored them. All empty or `None` without a
     /// pak, which is the same fallback the rest of this view already uses.
@@ -130,10 +176,23 @@ pub struct DexEntryView {
 #[derive(Debug, Default)]
 pub struct DexFacts {
     pub unlocked: Vec<String>,
-    /// Save species id -> best capture count across players.
+    /// Save species id -> capture count, for whichever [`PlayerScope`] was
+    /// asked for.
     pub capture_counts: std::collections::HashMap<String, i64>,
-    /// Save species ids whose capture bonus at least one player has claimed.
-    pub bonus_claimed: std::collections::HashSet<String>,
+    /// Save species id -> capture-bonus tier, same scope.
+    pub bonus_tiers: std::collections::HashMap<String, i64>,
+}
+
+/// One player, as the player selector lists them.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorldPlayerView {
+    pub player_uid: String,
+    /// `None` for a save whose world data didn't name this player; the UI
+    /// falls back to a shortened uid rather than showing nothing.
+    pub name: Option<String>,
+    /// `None` on a snapshot ingested before names were recorded.
+    pub level: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -304,20 +363,38 @@ pub fn snapshot_summary(store: &Store, snapshot_id: i64) -> Result<SnapshotSumma
     Ok(SnapshotSummaryView { snapshot_id, pal_count, player_count, taken_at })
 }
 
-pub fn pal_roster(store: &Store, snapshot_id: i64) -> Result<Vec<PalView>, String> {
+/// The snapshot's Pals, optionally only those one player owns.
+///
+/// Under [`PlayerScope::Only`] this filters on `pals.owner`, which drops Pals
+/// with no owner at all — base-camp workers, 71 of them in the save this was
+/// built against. That is correct for "show me *my* Pals", and it is why
+/// [`PlayerScope::All`] has to stay reachable from the UI: it is the only view
+/// that includes them.
+pub fn pal_roster(
+    store: &Store,
+    snapshot_id: i64,
+    scope: PlayerScope,
+) -> Result<Vec<PalView>, String> {
     let conn = store.conn();
-    let mut stmt = conn
-        .prepare(
-            "SELECT instance_id, character_id, owner, level, rank,
-                    soul_hp, soul_attack, soul_defense, soul_craft_speed,
-                    iv_hp, iv_shot, iv_defense, gender, is_lucky, is_boss,
-                    is_predator, nickname, location_kind
-             FROM pals WHERE snapshot_id = ?1 ORDER BY character_id, level DESC",
-        )
-        .map_err(|e| e.to_string())?;
+    let owner_clause = match scope {
+        PlayerScope::All => "",
+        PlayerScope::Only(_) => " AND owner = ?2",
+    };
+    let sql = format!(
+        "SELECT instance_id, character_id, owner, level, rank,
+                soul_hp, soul_attack, soul_defense, soul_craft_speed,
+                iv_hp, iv_shot, iv_defense, gender, is_lucky, is_boss,
+                is_predator, nickname, location_kind
+         FROM pals WHERE snapshot_id = ?1{owner_clause} ORDER BY character_id, level DESC"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
 
+    let bind: Vec<Box<dyn rusqlite::ToSql>> = match scope.uid() {
+        None => vec![Box::new(snapshot_id)],
+        Some(uid) => vec![Box::new(snapshot_id), Box::new(uid.to_owned())],
+    };
     let rows = stmt
-        .query_map([snapshot_id], |row| {
+        .query_map(rusqlite::params_from_iter(bind.iter()), |row| {
             Ok(PalView {
                 instance_id: row.get(0)?,
                 character_id: row.get(1)?,
@@ -392,48 +469,94 @@ pub fn pal_roster(store: &Store, snapshot_id: i64) -> Result<Vec<PalView>, Strin
 }
 
 /// Every dex fact the store holds for a world: which species are unlocked
-/// (append-only, across every snapshot) plus this snapshot's capture progress.
+/// (append-only, across every snapshot) plus this snapshot's capture progress,
+/// all as [`scope`](PlayerScope) asks for them.
 ///
-/// Capture counts are per player and the 10-capture bonus is earned per
-/// player, so the best count across players is what "progress toward the
-/// bonus" means for the world as a whole.
-pub fn dex_facts(store: &Store, world_id: &str, snapshot_id: i64) -> Result<DexFacts, String> {
+/// Capture counts and capture bonuses are earned *per player* — see
+/// [`PlayerScope`] for why aggregating them is a bug rather than a summary.
+/// Unlocks are read the same way: `dex_events` records who first saw each
+/// species, so scoping to a player answers "what has *this* player caught"
+/// while [`PlayerScope::All`] keeps the world-level roll-up.
+pub fn dex_facts(
+    store: &Store,
+    world_id: &str,
+    snapshot_id: i64,
+    scope: PlayerScope,
+) -> Result<DexFacts, String> {
+    let conn = store.conn();
+
+    let unlocked_sql = format!(
+        "SELECT DISTINCT character_id FROM dex_events WHERE world_id = ?1{} \
+         ORDER BY character_id",
+        scope.clause(2)
+    );
+    let mut stmt = conn.prepare(&unlocked_sql).map_err(|e| e.to_string())?;
+    let mut unlocked_binds: Vec<&str> = vec![world_id];
+    unlocked_binds.extend(scope.uid());
+    let unlocked: Vec<String> = stmt
+        .query_map(rusqlite::params_from_iter(unlocked_binds), |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+
+    // `MAX` is a no-op under `Only` (one row per player per key) and the
+    // world-level best under `All`, so one statement serves both.
+    let int_flags = |kind: &str| -> Result<std::collections::HashMap<String, i64>, String> {
+        let sql = format!(
+            "SELECT flag_key, MAX(COALESCE(value, 0)) FROM player_flags
+             WHERE snapshot_id = ?1 AND flag_kind = '{kind}'{}
+             GROUP BY flag_key",
+            scope.clause(2)
+        );
+        let mut s = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(snapshot_id)];
+        if let Some(uid) = scope.uid() {
+            binds.push(Box::new(uid.to_owned()));
+        }
+        let rows = s
+            .query_map(rusqlite::params_from_iter(binds.iter()), |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (key, value) = row.map_err(|e| e.to_string())?;
+            out.insert(key, value);
+        }
+        Ok(out)
+    };
+
+    let capture_counts = int_flags("capture_count")?;
+    let bonus_tiers = int_flags("capture_bonus_tier")?;
+
+    Ok(DexFacts { unlocked, capture_counts, bonus_tiers })
+}
+
+/// Who is in this world, for the player selector.
+///
+/// Ordered by name so the selector is stable between syncs — `players` has no
+/// inherent order, and a list that reshuffles under the user on every autosave
+/// would be worse than an arbitrary but fixed one.
+pub fn world_players(store: &Store, snapshot_id: i64) -> Result<Vec<WorldPlayerView>, String> {
     let conn = store.conn();
     let mut stmt = conn
-        .prepare("SELECT DISTINCT character_id FROM dex_events WHERE world_id = ?1 ORDER BY character_id")
-        .map_err(|e| e.to_string())?;
-    let unlocked: Vec<String> = stmt
-        .query_map([world_id], |row| row.get(0))
-        .map_err(|e| e.to_string())?
-        .collect::<Result<_, _>>()
-        .map_err(|e| e.to_string())?;
-
-    let mut count_stmt = conn
         .prepare(
-            "SELECT flag_key, MAX(COALESCE(value, 0)) FROM player_flags
-             WHERE snapshot_id = ?1 AND flag_kind = 'capture_count'
-             GROUP BY flag_key",
+            "SELECT player_uid, name, level FROM players WHERE snapshot_id = ?1
+             ORDER BY name IS NULL, name, player_uid",
         )
         .map_err(|e| e.to_string())?;
-    let capture_counts = count_stmt
-        .query_map([snapshot_id], |row| Ok((row.get(0)?, row.get(1)?)))
+    let players = stmt
+        .query_map([snapshot_id], |row| {
+            Ok(WorldPlayerView {
+                player_uid: row.get(0)?,
+                name: row.get(1)?,
+                level: row.get(2)?,
+            })
+        })
         .map_err(|e| e.to_string())?
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
-
-    let mut bonus_stmt = conn
-        .prepare(
-            "SELECT DISTINCT flag_key FROM player_flags
-             WHERE snapshot_id = ?1 AND flag_kind = 'capture_bonus_claimed'",
-        )
-        .map_err(|e| e.to_string())?;
-    let bonus_claimed = bonus_stmt
-        .query_map([snapshot_id], |row| row.get(0))
-        .map_err(|e| e.to_string())?
-        .collect::<Result<_, _>>()
-        .map_err(|e| e.to_string())?;
-
-    Ok(DexFacts { unlocked, capture_counts, bonus_claimed })
+    Ok(players)
 }
 
 pub fn player_progress(store: &Store, snapshot_id: i64) -> Result<Vec<PlayerProgressView>, String> {

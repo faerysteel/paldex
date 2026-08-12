@@ -63,6 +63,67 @@ fn decodes_a_real_player_with_plausible_progress() {
     );
 }
 
+/// `PalCaptureBonusCount` is a *tier*, not a boolean and not a count of
+/// bonuses earned: it is `min(capture_count, CAPTURE_BONUS_AT)`.
+///
+/// This is the whole basis for "the capture bonus completes at 5", which no
+/// `DataTable` in the game pak states — the thresholds are not shipped as
+/// data, so the save's own behaviour is the only evidence. It is also a
+/// regression test for reading the field with `find_map_true_keys`, which
+/// matched no `(Name, Bool)` pairs and so reported every species' bonus as
+/// unclaimed while silently type-checking.
+#[test]
+fn capture_bonus_tier_is_capture_count_capped_at_five() {
+    let player = require_real_player!();
+
+    assert!(
+        !player.capture_bonus_tiers.is_empty(),
+        "a save with capture counts must have capture bonus tiers"
+    );
+
+    for (species, tier) in &player.capture_bonus_tiers {
+        let count = player.capture_counts.get(species).copied().unwrap_or(0);
+        assert_eq!(
+            *tier,
+            count.min(paldex_model::CAPTURE_BONUS_AT),
+            "{species}: tier {tier} but {count} captures"
+        );
+    }
+
+    // A species caught enough times must be at the top tier, or the threshold
+    // itself is wrong rather than just the arithmetic above.
+    //
+    // Counted against the *tiered* species only. Some things the save counts
+    // captures for carry no tier at all and so have no capture bonus —
+    // `Human` most obviously, plus the Yakushima raid bosses. Comparing
+    // against every counted species instead would fail by exactly those.
+    let complete = player
+        .capture_counts
+        .iter()
+        .filter(|(species, c)| {
+            **c >= paldex_model::CAPTURE_BONUS_AT
+                && player.capture_bonus_tiers.contains_key(*species)
+        })
+        .count();
+    let at_top = player
+        .capture_bonus_tiers
+        .values()
+        .filter(|t| **t == paldex_model::CAPTURE_BONUS_AT)
+        .count();
+    eprintln!(
+        "{complete} tiered species at {}+ captures, {at_top} at the top tier",
+        paldex_model::CAPTURE_BONUS_AT
+    );
+    assert_eq!(complete, at_top);
+
+    let untiered: Vec<&String> = player
+        .capture_counts
+        .keys()
+        .filter(|s| !player.capture_bonus_tiers.contains_key(*s))
+        .collect();
+    eprintln!("counted but outside the bonus system: {untiered:?}");
+}
+
 #[test]
 fn dex_completion_never_exceeds_capture_counts_species() {
     let player = require_real_player!();

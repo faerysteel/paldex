@@ -36,7 +36,7 @@ fn main() {
     eprintln!(
         "{} pals, {} players, {} warnings",
         result.pals.len(),
-        result.player_count,
+        result.player_count(),
         result.warnings.len()
     );
 

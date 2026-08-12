@@ -1,4 +1,8 @@
-use paldex_model::{BaseCamp, Gender, Guild, GroupKind, Pal, PalLocationKind, PlayerProgress};
+use std::collections::HashMap;
+
+use paldex_model::{
+    BaseCamp, Gender, Guild, GroupKind, Pal, PalLocationKind, PlayerIdentity, PlayerProgress,
+};
 use rusqlite::{params, Transaction};
 
 use crate::{now_millis, StoreError};
@@ -11,6 +15,11 @@ pub struct SnapshotInput {
     pub level_hash: String,
     pub pals: Vec<Pal>,
     pub players: Vec<PlayerProgress>,
+    /// Names for `players`, from the world save rather than the per-player
+    /// ones. Joined on uid, and allowed to be missing or to name a player
+    /// `players` doesn't have — a save with an unreadable `Players/<uid>.sav`
+    /// still lists that character in the world.
+    pub player_identities: Vec<PlayerIdentity>,
     pub guilds: Vec<Guild>,
     pub base_camps: Vec<BaseCamp>,
 }
@@ -108,7 +117,11 @@ pub(crate) fn insert_players(
     tx: &Transaction,
     snapshot_id: i64,
     players: &[PlayerProgress],
+    identities: &[PlayerIdentity],
 ) -> Result<(), StoreError> {
+    let by_uid: HashMap<String, &PlayerIdentity> =
+        identities.iter().map(|i| (i.uid.to_string(), i)).collect();
+
     let mut player_stmt = tx.prepare(
         "INSERT INTO players (
              snapshot_id, player_uid, tech_points, boss_tech_points,
@@ -116,8 +129,8 @@ pub(crate) fn insert_players(
              pal_rankup_count, mutation_count, awakening_count,
              camp_conquered_count, oilrig_clear_count, normal_dungeon_clear_count,
              fixed_dungeon_clear_count, tribe_capture_count, predator_defeat_count,
-             relic_possess_total, treasures_found
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+             relic_possess_total, treasures_found, name, level
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
     )?;
     let mut flag_stmt = tx.prepare(
         "INSERT INTO player_flags (snapshot_id, player_uid, flag_kind, flag_key, value)
@@ -126,6 +139,7 @@ pub(crate) fn insert_players(
 
     for p in players {
         let player_uid = p.player_uid.to_string();
+        let identity = by_uid.get(&player_uid);
         player_stmt.execute(params![
             snapshot_id,
             player_uid,
@@ -145,6 +159,8 @@ pub(crate) fn insert_players(
             i64::from(p.bosses.predator_defeat_count),
             i64::from(p.collectibles.relic_possess_total),
             i64::from(p.collectibles.treasures_found),
+            identity.and_then(|i| i.name.clone()),
+            identity.map(|i| i64::from(i.level)),
         ])?;
 
         let mut set_flags = |kind: &str, keys: &std::collections::HashSet<String>| -> Result<(), StoreError> {
@@ -154,7 +170,6 @@ pub(crate) fn insert_players(
             Ok(())
         };
         set_flags("paldeck_unlocked", &p.paldeck_unlocked)?;
-        set_flags("capture_bonus_claimed", &p.capture_bonus_claimed)?;
         set_flags("fast_travel_unlocked", &p.fast_travel_unlocked)?;
         set_flags("normal_boss_defeated", &p.bosses.normal_defeated)?;
         set_flags("tower_boss_defeated", &p.bosses.tower_defeated)?;
@@ -169,6 +184,7 @@ pub(crate) fn insert_players(
             Ok(())
         };
         count_flags("capture_count", &p.capture_counts)?;
+        count_flags("capture_bonus_tier", &p.capture_bonus_tiers)?;
         count_flags("tower_boss_defeat_count", &p.bosses.tower_defeat_counts)?;
         count_flags("raid_boss_defeat_count", &p.bosses.raid_defeat_counts)?;
         count_flags("relic_possess_count", &p.collectibles.relic_possess_counts)?;

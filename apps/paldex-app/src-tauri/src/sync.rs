@@ -110,6 +110,7 @@ fn sync_world_inner(store: &mut Store, world: &World, force: bool) -> Result<Syn
     let base_camps = paldex_model::decode_base_camp_map(&map_entries("BaseCampSaveData"), &guild_ids);
 
     let mut pals = character_result.pals;
+    let player_identities = character_result.players;
     let mut players = Vec::new();
     for player_uid in &world.players {
         let path = world.path.join("Players").join(format!("{}.sav", player_uid.0));
@@ -136,6 +137,7 @@ fn sync_world_inner(store: &mut Store, world: &World, force: bool) -> Result<Syn
         level_hash,
         pals,
         players,
+        player_identities,
         guilds,
         base_camps,
     };
@@ -246,14 +248,16 @@ pub(crate) mod tests {
         );
         assert!(summary.pal_count > 0, "expected at least one pal in a real world");
 
-        let roster = crate::queries::pal_roster(&store, snapshot_id).expect("pal_roster");
+        let roster = crate::queries::pal_roster(&store, snapshot_id, crate::queries::PlayerScope::All)
+            .expect("pal_roster");
         assert_eq!(roster.len() as i64, summary.pal_count);
         assert!(
             roster.iter().all(|p| p.iv_hp <= 100 && p.iv_shot <= 100 && p.iv_defense <= 100),
             "every roster IV should be in 0..=100"
         );
 
-        let dex = crate::queries::dex_facts(&store, &world.id, snapshot_id).expect("dex_facts");
+        let dex = crate::queries::dex_facts(&store, &world.id, snapshot_id, crate::queries::PlayerScope::All)
+            .expect("dex_facts");
         eprintln!(
             "dex: {} species unlocked, {} with capture counts",
             dex.unlocked.len(),

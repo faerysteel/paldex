@@ -17,7 +17,7 @@ pub use rawdata::guild::{decode_group_map, GroupKind, Guild};
 pub use rawdata::player::decode_player;
 pub use types::{
     BossFlags, Collectibles, Gender, Ivs, MiscCounters, Pal, PalLocation, PalLocationKind,
-    PlayerProgress, QuestState, SoulUpgrades,
+    PlayerIdentity, PlayerProgress, QuestState, SoulUpgrades, CAPTURE_BONUS_AT,
 };
 
 /// Resolve each Pal's [`PalLocation::kind`] against a known player's

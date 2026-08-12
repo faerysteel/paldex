@@ -41,6 +41,27 @@ export interface SnapshotSummaryView {
   takenAt: number;
 }
 
+/**
+ * One player in the selected world, for the player selector.
+ *
+ * Most of what Palworld tracks — capture counts, capture bonuses, the Paldeck
+ * itself — is per player, so a shared world has no single answer to "how far
+ * along is this save". Every screen takes a `playerUid`, and `null` means the
+ * world as a whole.
+ */
+export interface WorldPlayerView {
+  playerUid: string;
+  /** Falls back to a shortened uid in the UI when the save didn't name them. */
+  name: string | null;
+  level: number | null;
+}
+
+/**
+ * Captures of one species needed to complete its capture bonus. Mirrors
+ * `paldex_model::CAPTURE_BONUS_AT`; see that constant for how it was derived.
+ */
+export const CAPTURE_BONUS_AT = 5;
+
 export type LocationKind = "party" | "box" | "other" | null;
 
 /**
@@ -111,9 +132,13 @@ export interface DexEntryView {
   /** Paldeck number as the game shows it, e.g. "005B". */
   dexLabel: string | null;
   caught: boolean;
-  /** Best `PalCaptureCount` across players, toward the 10-capture bonus. */
+  /**
+   * `PalCaptureCount` for the selected player, or the best across players
+   * when no player is selected.
+   */
   captureCount: number;
-  bonusClaimed: boolean;
+  /** Capture-bonus tier, 0..=CAPTURE_BONUS_AT; the top value means complete. */
+  bonusTier: number;
   /** All four are empty/null without a pak. */
   elements: ElementView[];
   rarity: number;

@@ -78,6 +78,32 @@ h2 {
 .actions {
   display: flex;
   gap: 0.5rem;
+  align-items: center;
+}
+
+/* The player selector. Sits with the header actions rather than in a tab,
+   because it scopes every screen at once — see WorldView. Rendered only when
+   the world has more than one player, so a solo save never sees it. */
+.player-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.player-picker select {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.player-picker select:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 /* --- buttons ------------------------------------------------------------ */

@@ -22,8 +22,8 @@ pub enum StoreError {
 }
 
 /// Schema version stamped into `PRAGMA user_version`. Bump when adding a
-/// migration.
-const SCHEMA_VERSION: i32 = 1;
+/// migration, and add it to [`Store::migrate`]'s ladder.
+const SCHEMA_VERSION: i32 = 2;
 
 pub struct Store {
     conn: Connection,
@@ -57,31 +57,70 @@ impl Store {
     /// error. The version stamp makes "which migrations has this file seen"
     /// explicit.
     fn migrate(conn: &Connection) -> Result<(), StoreError> {
-        let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let mut version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version >= SCHEMA_VERSION {
             return Ok(());
         }
 
-        // Databases created before versioning existed carry the full schema
-        // but a version of 0. Re-running the DDL against them fails on
-        // `table worlds already exists`, so adopt them by stamping instead.
-        if version == 0 && Self::has_initial_schema(conn)? {
-            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-            return Ok(());
+        // Databases created before versioning existed carry a schema but a
+        // version of 0. Re-running DDL against them fails on `table worlds
+        // already exists`, so work out what they actually have and enter the
+        // ladder there. Inferred from the schema rather than assumed to be
+        // version 1: a database can reach `user_version = 0` while holding a
+        // *later* schema, and stamping it straight to SCHEMA_VERSION would
+        // instead skip migrations it genuinely needs.
+        if version == 0 {
+            version = Self::detected_version(conn)?;
         }
 
-        conn.execute_batch(include_str!("../migrations/0001_init.sql"))?;
+        // One step per version, in order, each guarded by the version it
+        // upgrades *from*. A database at any earlier version walks the whole
+        // ladder; one at the current version does nothing.
+        if version < 1 {
+            conn.execute_batch(include_str!("../migrations/0001_init.sql"))?;
+        }
+        if version < 2 {
+            conn.execute_batch(include_str!("../migrations/0002_player_identity.sql"))?;
+        }
+
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
     }
 
-    fn has_initial_schema(conn: &Connection) -> Result<bool, StoreError> {
+    /// Which schema an unstamped database already has, by looking for the
+    /// marker each migration introduced. Returns 0 for an empty file, meaning
+    /// the ladder runs from the beginning.
+    fn detected_version(conn: &Connection) -> Result<i32, StoreError> {
+        if !Self::has_table(conn, "worlds")? {
+            return Ok(0);
+        }
+        if Self::has_column(conn, "players", "name")? {
+            return Ok(2);
+        }
+        Ok(1)
+    }
+
+    fn has_table(conn: &Connection, table: &str) -> Result<bool, StoreError> {
         let count: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'worlds'",
-            [],
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, StoreError> {
+        // `pragma_table_info` takes the table name as an identifier, so it
+        // can't be bound as a parameter; every caller passes a literal.
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Record (or refresh) a known save world.
@@ -115,7 +154,7 @@ impl Store {
         let tx = self.conn.transaction()?;
         let snapshot_id = ingest::insert_snapshot(&tx, world_id, input)?;
         ingest::insert_pals(&tx, snapshot_id, &input.pals)?;
-        ingest::insert_players(&tx, snapshot_id, &input.players)?;
+        ingest::insert_players(&tx, snapshot_id, &input.players, &input.player_identities)?;
         ingest::insert_guilds(&tx, snapshot_id, &input.guilds)?;
         ingest::insert_base_camps(&tx, snapshot_id, &input.base_camps)?;
         ingest::append_dex_events(&tx, world_id, input.taken_at, &input.players)?;

@@ -44,7 +44,13 @@ const POOLS: { id: Pool; label: string; hint: string }[] = [
  * Split from the grading above because it re-queries on every target change
  * while the grading is fetched once per snapshot.
  */
-export default function Breeding({ summary }: { summary: SnapshotSummaryView }) {
+interface Props {
+  summary: SnapshotSummaryView;
+  /** Whose Pals count as owned parents; `null` is every player. */
+  playerUid: string | null;
+}
+
+export default function Breeding({ summary, playerUid }: Props) {
   const [targets, setTargets] = useState<{ id: string; label: string }[]>([]);
   const [target, setTarget] = useState("");
   const [pool, setPool] = useState<Pool>("owned");
@@ -88,8 +94,8 @@ export default function Breeding({ summary }: { summary: SnapshotSummaryView }) 
     void (async () => {
       try {
         const [owned, waiting] = await Promise.all([
-          invoke<BreedingPairView[]>("breeding_options", { target }),
-          invoke<UnownedPairingView[]>("unowned_breeding_options", { target }),
+          invoke<BreedingPairView[]>("breeding_options", { target, playerUid }),
+          invoke<UnownedPairingView[]>("unowned_breeding_options", { target, playerUid }),
         ]);
         if (cancelled) return;
         setPairs(owned);
@@ -103,7 +109,7 @@ export default function Breeding({ summary }: { summary: SnapshotSummaryView }) 
     return () => {
       cancelled = true;
     };
-  }, [target, summary.snapshotId]);
+  }, [target, playerUid, summary.snapshotId]);
 
   // Paging is per pool, so switching tabs starts at the top of the new list.
   useEffect(() => setLimit(PAIR_PAGE), [pool]);
