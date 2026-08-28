@@ -62,7 +62,30 @@ export interface WorldPlayerView {
  */
 export const CAPTURE_BONUS_AT = 5;
 
-export type LocationKind = "party" | "box" | "other" | null;
+/**
+ * A Pal's condense stars, as the game shows them, from the `rank` the save
+ * stores.
+ *
+ * The save's `Rank` is 1-based: an uncondensed Pal is rank 1, and a fully
+ * condensed one is rank 5. The game displays that same scale as 0–4 stars, so
+ * showing the raw number reads as one more star than the player sees. The
+ * decoded value stays 1-based everywhere below the UI — that is what the save
+ * holds, and `paldex_model::Pal::rank` documents it as such — and this is the
+ * single place it is turned into what the game says.
+ *
+ * Confirmed against a real roster: 1,481 of 1,955 Pals are rank 1, which is
+ * the never-condensed default (`Rank` absent ⇒ 1), i.e. no stars.
+ */
+export function condenseStars(rank: number): number {
+  return Math.max(0, rank - 1);
+}
+
+/**
+ * Mirrors `paldex_model::PalLocationKind`. `"base"` means assigned to work at
+ * a base camp — resolved against the base's worker container, so it is a
+ * genuine answer rather than the `"other"` catch-all it used to fall into.
+ */
+export type LocationKind = "party" | "box" | "base" | "other" | null;
 
 /**
  * One of a species' elements. `id` is the game's internal enum name (`Leaf`,
@@ -171,10 +194,17 @@ export interface PlayerProgressView {
 export interface BaseCampView {
   id: string;
   guildId: string | null;
+  /**
+   * 1-based, assigned by sorting on `id`. The save has no base ordering and no
+   * usable name — every base decodes to the same untranslated placeholder — so
+   * this number is the only handle the user gets, and it stays stable between
+   * snapshots because the sort key does.
+   */
+  number: number;
+  workerCount: number;
+  workers: GradedPalView[];
 }
 
-/** Composite-IV tier from `analysis::IvTier`, serialized as the variant name. */
-export type IvTier = "D" | "C" | "B" | "A" | "S" | "Perfect";
 
 /** One owned Pal as the analysis screen shows it — a trimmed `PalView`. */
 export interface GradedPalView {
@@ -189,9 +219,8 @@ export interface GradedPalView {
   ivHp: number;
   ivShot: number;
   ivDefense: number;
-  /** Mean of the three talents. */
+  /** Mean of the three talents, on the same 0–100 scale they use. */
   composite: number;
-  tier: IvTier;
   /** Localized passive names, falling back to raw ids. */
   passiveNames: string[];
 }

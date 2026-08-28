@@ -220,13 +220,16 @@ pub(crate) fn insert_base_camps(
     snapshot_id: i64,
     base_camps: &[BaseCamp],
 ) -> Result<(), StoreError> {
-    let mut stmt =
-        tx.prepare("INSERT INTO base_camps (snapshot_id, id, guild_id) VALUES (?1,?2,?3)")?;
+    let mut stmt = tx.prepare(
+        "INSERT INTO base_camps (snapshot_id, id, guild_id, worker_container_id)
+         VALUES (?1,?2,?3,?4)",
+    )?;
     for b in base_camps {
         stmt.execute(params![
             snapshot_id,
             b.id.to_string(),
-            b.guild_id.map(|u| u.to_string())
+            b.guild_id.map(|u| u.to_string()),
+            b.worker_container_id.map(|u| u.to_string())
         ])?;
     }
     Ok(())
@@ -267,6 +270,7 @@ fn location_kind_str(k: PalLocationKind) -> &'static str {
     match k {
         PalLocationKind::Party => "party",
         PalLocationKind::Box => "box",
+        PalLocationKind::Base => "base",
         PalLocationKind::Other => "other",
     }
 }

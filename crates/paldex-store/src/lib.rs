@@ -23,7 +23,7 @@ pub enum StoreError {
 
 /// Schema version stamped into `PRAGMA user_version`. Bump when adding a
 /// migration, and add it to [`Store::migrate`]'s ladder.
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 pub struct Store {
     conn: Connection,
@@ -82,6 +82,9 @@ impl Store {
         if version < 2 {
             conn.execute_batch(include_str!("../migrations/0002_player_identity.sql"))?;
         }
+        if version < 3 {
+            conn.execute_batch(include_str!("../migrations/0003_base_worker_container.sql"))?;
+        }
 
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
@@ -90,9 +93,16 @@ impl Store {
     /// Which schema an unstamped database already has, by looking for the
     /// marker each migration introduced. Returns 0 for an empty file, meaning
     /// the ladder runs from the beginning.
+    ///
+    /// Checked newest-first: this returns the *highest* schema it can prove,
+    /// so a database carrying every marker must not stop at the first one it
+    /// matches and then re-run a migration it has already had.
     fn detected_version(conn: &Connection) -> Result<i32, StoreError> {
         if !Self::has_table(conn, "worlds")? {
             return Ok(0);
+        }
+        if Self::has_column(conn, "base_camps", "worker_container_id")? {
+            return Ok(3);
         }
         if Self::has_column(conn, "players", "name")? {
             return Ok(2);

@@ -8,6 +8,7 @@ import Roster from "./Roster";
 import Dex from "./Dex";
 import Analysis from "./Analysis";
 import Breeding from "./Breeding";
+import Bases from "./Bases";
 
 /**
  * Emitted by the Rust watcher after every automatic re-sync that ingested a
@@ -17,13 +18,14 @@ const SNAPSHOT_EVENT = "paldex://snapshot";
 /** How long the "updated" flash stays up after an automatic sync. */
 const FLASH_MS = 4000;
 
-type Tab = "dex" | "roster" | "analysis" | "breeding";
+type Tab = "dex" | "roster" | "analysis" | "breeding" | "bases";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dex", label: "Paldex" },
   { id: "roster", label: "Roster" },
   { id: "analysis", label: "Analysis" },
   { id: "breeding", label: "Breeding" },
+  { id: "bases", label: "Bases" },
 ];
 
 interface Props {
@@ -159,6 +161,9 @@ export default function WorldView({ summary, onBack, onSummaryChange }: Props) {
       {tab === "roster" && <Roster summary={summary} playerUid={playerUid} />}
       {tab === "analysis" && <Analysis summary={summary} playerUid={playerUid} />}
       {tab === "breeding" && <Breeding summary={summary} playerUid={playerUid} />}
+      {/* No `playerUid`: bases belong to the guild, not a player. Omitting it
+          here is what makes the tab's world scope visible at the call site. */}
+      {tab === "bases" && <Bases summary={summary} />}
     </div>
   );
 }

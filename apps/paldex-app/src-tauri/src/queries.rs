@@ -216,6 +216,27 @@ pub struct PlayerProgressView {
 pub struct BaseCampView {
     pub id: String,
     pub guild_id: Option<String>,
+    /// 1-based, assigned by sorting on `id`. The save has no base ordering and
+    /// no usable name — every base decodes to the same untranslated
+    /// placeholder, see `paldex-model`'s `rawdata::base_camp` — so this number
+    /// is the only handle the user gets, which means it must not shuffle
+    /// between snapshots. Sorting on the id is what guarantees that: map order
+    /// is not stable, and worker count changes as Pals are reassigned.
+    pub number: u32,
+    pub worker_count: u32,
+    pub workers: Vec<GradedPalView>,
+}
+
+/// One base camp and who works there, as ids.
+///
+/// The command layer turns the ids into graded, localized [`GradedPalView`]s,
+/// because it owns the pak-derived reference data — the same split
+/// [`pal_roster`] makes.
+#[derive(Debug)]
+pub struct BaseCampWorkers {
+    pub id: String,
+    pub guild_id: Option<String>,
+    pub worker_instance_ids: Vec<String>,
 }
 
 /// One Pal as the analysis screen shows it: enough to identify and judge it,
@@ -242,8 +263,6 @@ pub struct GradedPalView {
     pub iv_defense: i64,
     /// Mean of the three talents, as `analysis::grade_ivs` computes it.
     pub composite: f32,
-    /// The tier that composite falls in — `D`..`S`, or `Perfect`.
-    pub tier: String,
     /// Localized passive names, falling back to raw ids.
     pub passive_names: Vec<String>,
 }
@@ -604,24 +623,67 @@ pub fn player_progress(store: &Store, snapshot_id: i64) -> Result<Vec<PlayerProg
     rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
 }
 
-pub fn base_summary(store: &Store, snapshot_id: i64) -> Result<Vec<BaseCampView>, String> {
+/// Every base camp in the snapshot, each with the instance ids of the Pals
+/// working there, ordered by base id so [`BaseCampView::number`] is stable.
+///
+/// The join is `pals.location_container_id = base_camps.worker_container_id`,
+/// both of which the store already holds — see the `0003` migration. It is a
+/// `LEFT JOIN` on purpose: a base with no workers, or one whose container did
+/// not decode (`worker_container_id IS NULL`, which a snapshot ingested before
+/// that migration will have), is still a base and must still be listed.
+///
+/// There is no index on `pals(snapshot_id, location_container_id)`. At ~2,000
+/// rows per snapshot and a handful of bases this is a scan of no consequence.
+pub fn base_camp_workers(store: &Store, snapshot_id: i64) -> Result<Vec<BaseCampWorkers>, String> {
     let conn = store.conn();
     let mut stmt = conn
-        .prepare("SELECT id, guild_id FROM base_camps WHERE snapshot_id = ?1")
+        .prepare(
+            "SELECT b.id, b.guild_id, p.instance_id
+             FROM base_camps b
+             LEFT JOIN pals p
+               ON p.snapshot_id = b.snapshot_id
+              AND p.location_container_id = b.worker_container_id
+             WHERE b.snapshot_id = ?1
+             ORDER BY b.id, p.instance_id",
+        )
         .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([snapshot_id], |row| Ok(BaseCampView { id: row.get(0)?, guild_id: row.get(1)? }))
+    let rows: Vec<(String, Option<String>, Option<String>)> = stmt
+        .query_map([snapshot_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+
+    // Ordered by base id, so each base's rows arrive contiguously and this
+    // folds them without needing a map (which would reorder them again).
+    let mut bases: Vec<BaseCampWorkers> = Vec::new();
+    for (id, guild_id, instance_id) in rows {
+        if bases.last().map(|b| &b.id) != Some(&id) {
+            bases.push(BaseCampWorkers {
+                id,
+                guild_id,
+                worker_instance_ids: Vec::new(),
+            });
+        }
+        // NULL only for the LEFT JOIN's no-workers row.
+        if let Some(instance_id) = instance_id {
+            bases
+                .last_mut()
+                .expect("just pushed")
+                .worker_instance_ids
+                .push(instance_id);
+        }
+    }
+    Ok(bases)
 }
 
 /// World & player progress beyond the scalar counters `player_progress`
 /// already covers — tech tree, boss defeats, quest completion, collectibles
 /// — all of it already sitting in `player_flags` since Phase 4's ingest, just
-/// not queried back out until now. Base camp worker/storage detail isn't
-/// included: `BaseCampSaveData`'s bespoke binary format (see
-/// `paldex-model::rawdata::base_camp`'s docs) isn't decoded past id and
-/// guild ownership yet.
+/// not queried back out until now. Base camp detail isn't included: who works
+/// at each base is its own query ([`base_camp_workers`]), and the rest of
+/// `BaseCampSaveData`'s bespoke binary format — buildings, storage contents,
+/// work orders — isn't decoded at all (see
+/// `paldex-model::rawdata::base_camp`'s docs).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerFlagsView {

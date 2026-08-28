@@ -1,12 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-import type {
-  GradedPalView,
-  IvTier,
-  PalQualityView,
-  SnapshotSummaryView,
-} from "./types";
+import type { GradedPalView, PalQualityView, SnapshotSummaryView } from "./types";
+import { condenseStars } from "./types";
 import { useSpeciesIcons } from "./icons";
 
 /**
@@ -38,9 +34,11 @@ interface Props {
  * The breeding search is its own tab — see `Breeding.tsx`.
  *
  * Every number shown is an input to a recommendation rather than a verdict —
- * the plan asks for suggestions the player can check, so the composite score,
- * the tier it falls in, and the passives a pairing would draw from are all on
- * screen next to the suggestion they produced.
+ * the plan asks for suggestions the player can check, so the composite score
+ * and the passives a pairing would draw from are on screen next to the
+ * suggestion they produced. The letter tiers that used to sit beside the
+ * score are gone: they were our thresholds, not the game's, and restated the
+ * number without adding to it.
  */
 export default function Analysis({ summary, playerUid }: Props) {
   const [quality, setQuality] = useState<PalQualityView | null>(null);
@@ -110,8 +108,11 @@ export default function Analysis({ summary, playerUid }: Props) {
   );
   const icons = useSpeciesIcons(speciesOnScreen);
 
+  // 100 across all three talents, so a mean of exactly 100 — the one quality
+  // threshold the game itself makes meaningful, unlike the letter tiers this
+  // screen used to show.
   const perfect = useMemo(
-    () => (quality?.graded ?? []).filter((p) => p.tier === "Perfect").length,
+    () => (quality?.graded ?? []).filter((p) => p.composite >= 100).length,
     [quality],
   );
 
@@ -176,11 +177,10 @@ export default function Analysis({ summary, playerUid }: Props) {
               <th>Species</th>
               <th>Nickname</th>
               <th>Lv</th>
-              <th>Rank</th>
+              <th>Stars</th>
               <th>Gender</th>
               <th>IVs (HP/Shot/Def)</th>
               <th>Score</th>
-              <th>Tier</th>
               <th>Passives</th>
             </tr>
           </thead>
@@ -204,15 +204,12 @@ export default function Analysis({ summary, playerUid }: Props) {
                 </td>
                 <td className="muted">{pal.nickname ?? ""}</td>
                 <td>{pal.level}</td>
-                <td>{pal.rank}</td>
+                <td>{condenseStars(pal.rank)}</td>
                 <td className="muted">{pal.gender}</td>
                 <td className="ivs">
                   {pal.ivHp}/{pal.ivShot}/{pal.ivDefense}
                 </td>
                 <td>{pal.composite.toFixed(1)}</td>
-                <td>
-                  <TierBadge tier={pal.tier} />
-                </td>
                 <td className="muted passives">{pal.passiveNames.join(", ")}</td>
               </tr>
             ))}
@@ -233,18 +230,14 @@ export default function Analysis({ summary, playerUid }: Props) {
       )}
 
       <p className="muted dex-detail-note">
-        Tiers are a judgment call on the composite (mean) IV score, not an
-        in-game mechanic: 100 is Perfect, 90+ S, 80+ A, 70+ B, 60+ C. “By
-        passives” ranks on passive <em>count</em> — the game states no ordering
-        between one passive and another, so inventing a tier list would be a
-        guess dressed as advice.
+        Score is the mean of a Pal’s three talents, on the same 0–100 scale
+        they use — the raw number, with no grading laid over it. “By passives”
+        ranks on passive <em>count</em>: the game states no ordering between
+        one passive and another, so inventing a tier list would be a guess
+        dressed as advice.
       </p>
     </section>
   );
-}
-
-function TierBadge({ tier }: { tier: IvTier }) {
-  return <span className={`tier tier-${tier.toLowerCase()}`}>{tier}</span>;
 }
 
 /** Instance ids back to rows, skipping any the graded list somehow lacks. */

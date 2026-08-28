@@ -726,15 +726,72 @@ pub fn player_progress(app: AppHandle, state: State<AppState>) -> Result<Vec<Pla
     with_store(&app, &state, |store| queries::player_progress(store, snapshot_id))
 }
 
-/// Base camps for the currently selected world's latest snapshot.
+/// Base camps for the currently selected world's latest snapshot, each with
+/// the Pals working there.
+///
+/// Takes no player argument, and deliberately so: a base belongs to the guild,
+/// not to a player — the same reasoning that makes base Pals orthogonal to
+/// [`queries::PlayerScope`]. The roster is fetched with `All`/`Include`
+/// because base workers are exactly the Pals that `Exclude` drops.
 ///
 /// # Errors
 ///
 /// A display-ready message if no world is selected, or the query fails.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn base_summary(app: AppHandle, state: State<AppState>) -> Result<Vec<BaseCampView>, String> {
     let snapshot_id = selected_snapshot_id(&state)?;
-    with_store(&app, &state, |store| queries::base_summary(store, snapshot_id))
+    let bases = with_store(&app, &state, |store| {
+        queries::base_camp_workers(store, snapshot_id)
+    })?;
+    let (views, pals) =
+        analysis_roster(&app, &state, queries::PlayerScope::All, queries::BasePals::Include)?;
+    Ok(base_summary_view(&bases, &views, &pals))
+}
+
+/// The assembly itself, split from the command so it can be exercised against
+/// the real save without a running Tauri app — the same split
+/// [`quality_view`] makes.
+fn base_summary_view(
+    bases: &[queries::BaseCampWorkers],
+    views: &[PalView],
+    pals: &[paldex_model::Pal],
+) -> Vec<BaseCampView> {
+    let graded: std::collections::HashMap<&str, queries::GradedPalView> = views
+        .iter()
+        .zip(pals)
+        .map(|(view, pal)| (view.instance_id.as_str(), graded_view(view, pal)))
+        .collect();
+
+    bases
+        .iter()
+        .enumerate()
+        .map(|(index, base)| {
+            let mut workers: Vec<queries::GradedPalView> = base
+                .worker_instance_ids
+                .iter()
+                .filter_map(|id| graded.get(id.as_str()).cloned())
+                .collect();
+            // Same ordering the analysis screen gives a `GradedPalView` list,
+            // so the shared type reads the same wherever it appears.
+            workers.sort_by(|a, b| {
+                b.composite
+                    .total_cmp(&a.composite)
+                    .then_with(|| b.level.cmp(&a.level))
+                    .then_with(|| a.instance_id.cmp(&b.instance_id))
+            });
+
+            BaseCampView {
+                id: base.id.clone(),
+                guild_id: base.guild_id.clone(),
+                // 1-based over a list `base_camp_workers` already sorted by id.
+                number: u32::try_from(index + 1).unwrap_or(u32::MAX),
+                // Counted after the join back onto the roster, so it can never
+                // disagree with the list actually rendered.
+                worker_count: u32::try_from(workers.len()).unwrap_or(u32::MAX),
+                workers,
+            }
+        })
+        .collect()
 }
 
 /// The enriched roster, paired with the domain [`Pal`]s the analysis functions
@@ -865,7 +922,6 @@ fn quality_view(views: &[PalView], pals: &[paldex_model::Pal]) -> queries::PalQu
 }
 
 fn graded_view(view: &PalView, pal: &paldex_model::Pal) -> queries::GradedPalView {
-    let grade = paldex_model::grade_ivs(&pal.ivs);
     queries::GradedPalView {
         instance_id: view.instance_id.clone(),
         character_id: view.character_id.clone(),
@@ -877,8 +933,7 @@ fn graded_view(view: &PalView, pal: &paldex_model::Pal) -> queries::GradedPalVie
         iv_hp: view.iv_hp,
         iv_shot: view.iv_shot,
         iv_defense: view.iv_defense,
-        composite: grade.composite,
-        tier: format!("{:?}", grade.tier),
+        composite: paldex_model::grade_ivs(&pal.ivs),
         passive_names: passive_labels(view),
     }
 }
@@ -1483,6 +1538,64 @@ mod tests {
         );
     }
 
+    /// Phase 1's model-level partition test, re-asserted at the query level:
+    /// the bases between them claim every ownerless Pal, exactly once each.
+    ///
+    /// This is the assertion that catches a break anywhere in the chain —
+    /// decode, ingest, or join — rather than only in the decoder.
+    #[test]
+    fn base_summary_workers_partition_the_unowned_roster() {
+        let Some(world) = crate::sync::tests::real_trackable_world() else {
+            eprintln!("skipping: need a real save");
+            return;
+        };
+        let mut store = Store::open_in_memory().expect("store");
+        let snapshot_id = crate::sync::sync_world(&mut store, &world).expect("sync");
+
+        let bases = queries::base_camp_workers(&store, snapshot_id).expect("base_camp_workers");
+        let roster = queries::pal_roster(
+            &store,
+            snapshot_id,
+            queries::PlayerScope::All,
+            queries::BasePals::Include,
+        )
+        .expect("pal_roster");
+        let unowned = roster.iter().filter(|v| v.owner.is_none()).count();
+        let pals: Vec<paldex_model::Pal> = roster.iter().filter_map(to_model_pal).collect();
+        let views: Vec<PalView> = roster
+            .into_iter()
+            .filter(|v| uuid::Uuid::parse_str(&v.instance_id).is_ok())
+            .collect();
+
+        let summary = base_summary_view(&bases, &views, &pals);
+        for base in &summary {
+            eprintln!("base {} ({}): {} workers", base.number, base.id, base.worker_count);
+        }
+
+        let numbers: Vec<u32> = summary.iter().map(|b| b.number).collect();
+        let expected: Vec<u32> = (1..=u32::try_from(summary.len()).unwrap()).collect();
+        assert_eq!(numbers, expected, "bases should be numbered 1..=n in id order");
+
+        for base in &summary {
+            assert_eq!(
+                base.worker_count as usize,
+                base.workers.len(),
+                "worker_count must match the list actually sent",
+            );
+        }
+
+        let claimed: Vec<&str> =
+            summary.iter().flat_map(|b| b.workers.iter().map(|w| w.instance_id.as_str())).collect();
+        let distinct: std::collections::HashSet<&str> = claimed.iter().copied().collect();
+        assert_eq!(claimed.len(), distinct.len(), "no Pal should work at two bases");
+        assert_eq!(
+            claimed.len(),
+            unowned,
+            "the bases should account for every ownerless Pal, and nothing else",
+        );
+        assert!(unowned > 0, "if this is 0 the fixture changed");
+    }
+
     /// Base-camp Pals have no owner but can still be put in a breeding farm,
     /// so `BasePals::Include` must add them to *every* scope — including a
     /// single player's, where the owner filter would otherwise drop them.
@@ -1586,12 +1699,15 @@ mod tests {
         );
         assert_eq!(view.passive_ranking.len(), view.graded.len());
 
-        // Tiers must be the enum's own names -- the UI keys styling off them.
+        // The composite is a mean of three 0..=100 talents, so it shares their
+        // range -- and being the only quality number the UI shows now that the
+        // tiers are gone, a nonsense value would go unnoticed.
         for g in &view.graded {
             assert!(
-                ["D", "C", "B", "A", "S", "Perfect"].contains(&g.tier.as_str()),
-                "unexpected tier {}",
-                g.tier
+                (0.0..=100.0).contains(&g.composite),
+                "composite {} out of range for {}",
+                g.composite,
+                g.character_id
             );
         }
     }
@@ -2232,7 +2348,8 @@ mod tests {
             let facts = queries::dex_facts(&store, &world.id, snapshot_id, queries::PlayerScope::All).ok()?;
             let players = queries::player_progress(&store, snapshot_id).ok()?;
             let summary = queries::snapshot_summary(&store, snapshot_id).ok()?;
-            Some((dex_with_reference(&facts, &loaded.index), players, summary))
+            let bases = queries::base_camp_workers(&store, snapshot_id).ok()?;
+            Some((dex_with_reference(&facts, &loaded.index), players, summary, bases))
         });
 
         // Roster species *plus* every dex entry: the dex grid shows uncaught
@@ -2242,7 +2359,7 @@ mod tests {
         // screen is worse than no preview.
         let mut species: std::collections::BTreeSet<String> =
             roster.iter().map(|p| p.character_id.clone()).collect();
-        if let Some((dex, _, _)) = &derived {
+        if let Some((dex, _, _, _)) = &derived {
             species.extend(dex.entries.iter().map(|e| e.character_id.clone()));
         }
         let mut icons = serde_json::Map::new();
@@ -2378,9 +2495,16 @@ mod tests {
         }
         eprintln!("fixture: {unowned_files} unowned targets, {unowned_total} pairings total");
 
-        if let Some((dex, players, summary)) = &derived {
+        if let Some((dex, players, summary, bases)) = &derived {
             write("dex_progress", serde_json::to_value(dex).unwrap());
             write("player_progress", serde_json::to_value(players).unwrap());
+            // The Bases tab. One file, not twelve: `base_summary` takes
+            // neither the player nor the base-pals axis, because a base
+            // belongs to the guild rather than to a player.
+            let base_view = base_summary_view(bases, &views, &pals);
+            let worker_total: u32 = base_view.iter().map(|b| b.worker_count).sum();
+            write("base_summary", serde_json::to_value(&base_view).unwrap());
+            eprintln!("fixture: {} bases, {worker_total} workers total", base_view.len());
             // `list_saves` and `select_world` are what let the harness render
             // the *whole* App, world picker included — the transition that
             // took the UI down once already. Without them the preview stops at

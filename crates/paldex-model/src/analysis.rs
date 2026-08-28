@@ -15,53 +15,22 @@ use serde::Serialize;
 
 use crate::types::{Gender, Ivs, Pal};
 
-/// A coarse quality tier from a Pal's composite IV score (the mean of its
-/// three talents). Thresholds are a documented, arbitrary judgment call —
-/// not an in-game mechanic — chosen to roughly match community convention
-/// (100 across the board is the universally recognized "perfect" Pal).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub enum IvTier {
-    D,
-    C,
-    B,
-    A,
-    S,
-    Perfect,
-}
-
-fn tier_for(composite: f32) -> IvTier {
-    if composite >= 100.0 {
-        IvTier::Perfect
-    } else if composite >= 90.0 {
-        IvTier::S
-    } else if composite >= 80.0 {
-        IvTier::A
-    } else if composite >= 70.0 {
-        IvTier::B
-    } else if composite >= 60.0 {
-        IvTier::C
-    } else {
-        IvTier::D
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub struct IvGrade {
-    pub composite: f32,
-    pub tier: IvTier,
-}
-
-/// Grade a set of IVs by their composite (mean) score.
+/// A Pal's composite IV score: the unweighted mean of its three talents, so
+/// it lands on the same 0–100 scale they do.
+///
+/// This used to also bucket the score into a D/C/B/A/S/Perfect tier. That was
+/// removed: the thresholds were an arbitrary judgment call rather than an
+/// in-game mechanic, and printing a made-up letter next to the real number it
+/// came from added nothing the number did not already say.
 ///
 /// Monotonic by construction: a mean can never decrease when one of its
 /// inputs increases and the others hold steady, so a Pal that is at least as
 /// good as another in every talent, and strictly better in one, always
-/// grades at least as high — see `tests::grading_is_monotonic` for the
+/// scores at least as high — see `tests::grading_is_monotonic` for the
 /// property test the plan calls for.
 #[must_use]
-pub fn grade_ivs(ivs: &Ivs) -> IvGrade {
-    let composite = (f32::from(ivs.hp) + f32::from(ivs.shot) + f32::from(ivs.defense)) / 3.0;
-    IvGrade { composite, tier: tier_for(composite) }
+pub fn grade_ivs(ivs: &Ivs) -> f32 {
+    (f32::from(ivs.hp) + f32::from(ivs.shot) + f32::from(ivs.defense)) / 3.0
 }
 
 /// The single best specimen of each species present in `pals`, by composite
@@ -83,8 +52,8 @@ pub fn best_of_species(pals: &[Pal]) -> HashMap<&str, &Pal> {
 }
 
 fn is_better(candidate: &Pal, current: &Pal) -> bool {
-    let candidate_score = grade_ivs(&candidate.ivs).composite;
-    let current_score = grade_ivs(&current.ivs).composite;
+    let candidate_score = grade_ivs(&candidate.ivs);
+    let current_score = grade_ivs(&current.ivs);
     (candidate_score, candidate.level, candidate.instance_id)
         > (current_score, current.level, current.instance_id)
 }
@@ -123,7 +92,7 @@ pub fn rank_by_passives(pals: &[Pal]) -> Vec<&Pal> {
         b.passives
             .len()
             .cmp(&a.passives.len())
-            .then(grade_ivs(&b.ivs).composite.total_cmp(&grade_ivs(&a.ivs).composite))
+            .then(grade_ivs(&b.ivs).total_cmp(&grade_ivs(&a.ivs)))
     });
     ranked
 }
@@ -142,8 +111,11 @@ const MAX_CHILD_PASSIVES: usize = 4;
 /// How much one inheritable passive is worth against one point of average
 /// parent IV, when ranking pairs.
 ///
-/// A judgment call, like [`tier_for`]'s thresholds — the game states no
-/// exchange rate between the two. At 5.0 a full four-passive pool is worth 20
+/// A judgment call — the game states no exchange rate between the two, so
+/// this weight is ours, not its. Kept (unlike the IV tiers, which were
+/// removed) because it does not present itself as a fact: it only orders
+/// suggestions, and the UI shows the IV average and the passive pool that
+/// produced each one. At 5.0 a full four-passive pool is worth 20
 /// IV points, so passives break ties between comparable parents without a
 /// weak-but-well-passived pair outranking a near-perfect one.
 const PASSIVE_WEIGHT: f32 = 5.0;
@@ -398,7 +370,7 @@ fn owned_score(pairing: &UnownedPairing<'_>) -> f32 {
         .owned_a
         .into_iter()
         .chain(pairing.owned_b)
-        .map(|pal| grade_ivs(&pal.ivs).composite)
+        .map(|pal| grade_ivs(&pal.ivs))
         .fold(0.0, f32::max)
 }
 
@@ -450,8 +422,7 @@ fn group_by_species(pals: &[Pal]) -> HashMap<String, Vec<&Pal>> {
 /// handed the roster over in.
 fn best_first(a: &&Pal, b: &&Pal) -> std::cmp::Ordering {
     grade_ivs(&b.ivs)
-        .composite
-        .total_cmp(&grade_ivs(&a.ivs).composite)
+        .total_cmp(&grade_ivs(&a.ivs))
         .then_with(|| b.level.cmp(&a.level))
         .then_with(|| b.instance_id.cmp(&a.instance_id))
 }
@@ -521,7 +492,7 @@ fn can_breed(a: &Pal, b: &Pal) -> bool {
 }
 
 fn score_pair<'a>(a: &'a Pal, b: &'a Pal) -> BreedingPair<'a> {
-    let parent_iv_average = (grade_ivs(&a.ivs).composite + grade_ivs(&b.ivs).composite) / 2.0;
+    let parent_iv_average = (grade_ivs(&a.ivs) + grade_ivs(&b.ivs)) / 2.0;
 
     // Deduplicated but order-preserving: a passive both parents carry is one
     // passive the child might inherit, not two, and the player reads this list
@@ -573,15 +544,17 @@ mod tests {
     }
 
     #[test]
-    fn perfect_ivs_grade_as_perfect() {
-        let grade = grade_ivs(&Ivs { hp: 100, shot: 100, defense: 100 });
-        assert_eq!(grade.tier, IvTier::Perfect);
+    fn the_composite_spans_the_same_range_as_the_talents() {
+        assert_eq!(grade_ivs(&Ivs { hp: 100, shot: 100, defense: 100 }), 100.0);
+        assert_eq!(grade_ivs(&Ivs { hp: 0, shot: 0, defense: 0 }), 0.0);
     }
 
     #[test]
-    fn zero_ivs_grade_as_d() {
-        let grade = grade_ivs(&Ivs { hp: 0, shot: 0, defense: 0 });
-        assert_eq!(grade.tier, IvTier::D);
+    fn the_composite_is_the_unweighted_mean() {
+        // No talent counts for more than another: the same three values in
+        // any arrangement score identically.
+        assert_eq!(grade_ivs(&Ivs { hp: 90, shot: 60, defense: 30 }), 60.0);
+        assert_eq!(grade_ivs(&Ivs { hp: 30, shot: 90, defense: 60 }), 60.0);
     }
 
     #[test]
@@ -611,12 +584,9 @@ mod tests {
             let base_grade = grade_ivs(&base);
             let bumped_grade = grade_ivs(&bumped);
             assert!(
-                bumped_grade.composite >= base_grade.composite,
-                "bumping a talent should never lower the composite score: {base:?} -> {bumped:?}"
-            );
-            assert!(
-                bumped_grade.tier >= base_grade.tier,
-                "bumping a talent should never lower the tier: {base:?} ({base_grade:?}) -> {bumped:?} ({bumped_grade:?})"
+                bumped_grade >= base_grade,
+                "bumping a talent should never lower the composite score: \
+                 {base:?} ({base_grade}) -> {bumped:?} ({bumped_grade})"
             );
         }
     }

@@ -7,6 +7,7 @@ import type {
   PlayerProgressView,
   SnapshotSummaryView,
 } from "./types";
+import { condenseStars } from "./types";
 import { useSpeciesIcons } from "./icons";
 import { elementColor } from "./elements";
 
@@ -261,7 +262,7 @@ export default function Roster({ summary, playerUid }: Props) {
                   Lv
                 </SortableHeader>
                 <SortableHeader column="rank" sort={sort} onToggle={toggleSort}>
-                  Rank
+                  Stars
                 </SortableHeader>
                 <SortableHeader column="rarity" sort={sort} onToggle={toggleSort}>
                   Rarity
@@ -307,7 +308,7 @@ export default function Roster({ summary, playerUid }: Props) {
                   </td>
                   <td className="muted">{pal.nickname ?? ""}</td>
                   <td>{pal.level}</td>
-                  <td>{pal.rank}</td>
+                  <td>{condenseStars(pal.rank)}</td>
                   <td className="muted">{pal.rarity > 0 ? pal.rarity : ""}</td>
                   <td className="muted">{pal.gender}</td>
                   <td className="ivs">
@@ -395,8 +396,13 @@ function locationLabel(kind: PalView["locationKind"]): string {
       return "Party";
     case "box":
       return "Box";
+    case "base":
+      return "Base";
+    // Was "Base / other" back when base containers weren't resolved and every
+    // base worker landed here. They now say "Base", so this is the genuine
+    // remainder: a container belonging to no known player and no known base.
     case "other":
-      return "Base / other";
+      return "Other";
     default:
       return "Unknown";
   }

@@ -44,7 +44,7 @@ CREATE TABLE pals (
     nickname TEXT,
     location_container_id TEXT,
     location_slot_index INTEGER,
-    location_kind TEXT, -- 'party' | 'box' | 'other'
+    location_kind TEXT, -- 'party' | 'box' | 'base' | 'other'
     PRIMARY KEY (snapshot_id, instance_id)
 );
 CREATE INDEX idx_pals_snapshot_species ON pals(snapshot_id, character_id);

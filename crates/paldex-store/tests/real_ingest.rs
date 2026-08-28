@@ -62,6 +62,9 @@ fn real_snapshot() -> Option<(World, SnapshotInput)> {
             players.push(player);
         }
     }
+    // Mirrors sync.rs: base containers are resolved after every player's, so
+    // a Party/Box answer is never overwritten.
+    paldex_model::resolve_base_locations(&mut pals, &base_camps);
 
     let mut hasher = DefaultHasher::new();
     raw.hash(&mut hasher);
@@ -114,6 +117,52 @@ fn ingests_a_real_snapshot_and_counts_reconcile() {
         .query_row("SELECT COUNT(*) FROM players WHERE snapshot_id = ?1", [snapshot_id], |r| r.get(0))
         .unwrap();
     assert_eq!(conn_player_count as usize, player_count);
+}
+
+/// Every Pal lands in a location the UI can name. Before base containers were
+/// decoded, the 71 base workers fell into `'other'` — the placeholder this
+/// whole feature exists to retire — so the load-bearing half of this is the
+/// zero, not the count.
+#[test]
+fn every_ingested_pal_resolves_to_a_named_location() {
+    let (_world, input) = require_real_snapshot!();
+
+    let mut store = Store::open_in_memory().unwrap();
+    store.upsert_world("test-world", "test", "0", "/tmp/test").unwrap();
+    let snapshot_id = store.ingest_snapshot("test-world", &input).unwrap();
+
+    let count = |kind: &str| -> i64 {
+        store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM pals WHERE snapshot_id = ?1 AND location_kind = ?2",
+                rusqlite::params![snapshot_id, kind],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    let (party, boxed, base, other) = (count("party"), count("box"), count("base"), count("other"));
+    eprintln!("locations: party={party}, box={boxed}, base={base}, other={other}");
+
+    assert_eq!(other, 0, "no Pal should be left in the 'other' placeholder");
+    assert!(base > 0, "expected some Pals working at a base camp");
+
+    let workers_with_a_base: i64 = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM pals p
+             JOIN base_camps b
+               ON b.snapshot_id = p.snapshot_id
+              AND b.worker_container_id = p.location_container_id
+             WHERE p.snapshot_id = ?1 AND p.location_kind = 'base'",
+            [snapshot_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        workers_with_a_base, base,
+        "every 'base' Pal should join to the base camp whose worker container it sits in",
+    );
 }
 
 #[test]

@@ -122,6 +122,9 @@ fn sync_world_inner(store: &mut Store, world: &World, force: bool) -> Result<Syn
             players.push(player);
         }
     }
+    // After every player, never before: a Pal already claimed as Party or Box
+    // keeps that answer — see `resolve_base_locations`.
+    paldex_model::resolve_base_locations(&mut pals, &base_camps);
 
     let taken_at = i64::try_from(
         std::time::SystemTime::now()
@@ -272,8 +275,10 @@ pub(crate) mod tests {
         let players = crate::queries::player_progress(&store, snapshot_id).expect("player_progress");
         assert_eq!(players.len() as i64, summary.player_count);
 
-        let bases = crate::queries::base_summary(&store, snapshot_id).expect("base_summary");
-        eprintln!("{} base camps", bases.len());
+        let bases =
+            crate::queries::base_camp_workers(&store, snapshot_id).expect("base_camp_workers");
+        let workers: usize = bases.iter().map(|b| b.worker_instance_ids.len()).sum();
+        eprintln!("{} base camps, {workers} workers assigned", bases.len());
 
         let flags = crate::queries::player_flags_detail(&store, snapshot_id).expect("player_flags_detail");
         assert_eq!(flags.len() as i64, summary.player_count);

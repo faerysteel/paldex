@@ -893,45 +893,6 @@ code {
   align-self: center;
 }
 
-/* IV tiers. Deliberately a ramp from danger through accent to good rather
-   than six unrelated hues: the tiers are ordered, and the colour should say
-   so at a glance. */
-.tier {
-  display: inline-block;
-  min-width: 3.2rem;
-  text-align: center;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  padding: 0.1rem 0.45rem;
-  font-size: 0.72rem;
-  font-weight: 600;
-}
-
-.tier-d {
-  color: var(--muted);
-}
-
-.tier-c {
-  color: var(--danger);
-}
-
-.tier-b {
-  color: var(--warn);
-}
-
-.tier-a {
-  color: var(--accent);
-}
-
-.tier-s {
-  color: var(--good);
-}
-
-.tier-perfect {
-  color: var(--good);
-  background: color-mix(in srgb, var(--good) 18%, transparent);
-}
-
 /* --- breeding ----------------------------------------------------------- */
 
 .breeding {
@@ -1075,4 +1036,80 @@ code {
   font-weight: 600;
   color: var(--warn);
   white-space: nowrap;
+}
+
+/* --- bases -------------------------------------------------------------- */
+
+.bases {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.base-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.base-item {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  overflow: hidden;
+}
+
+/* The whole row is the control, so the hit target matches what looks
+   clickable rather than just the caret. */
+.base-head {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.7rem 0.95rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.base-head:hover {
+  background: var(--panel-2);
+}
+
+/* Fixed width so the label doesn't shift sideways when the caret flips. */
+.base-caret {
+  width: 0.9rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.base-name {
+  font-weight: 600;
+}
+
+.base-count {
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Already inside the item's border, so it drops its own and its radius
+   rather than drawing a second frame within the first. */
+.base-workers {
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+}
+
+.base-empty {
+  margin: 0;
+  padding: 0.7rem 0.95rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
 }

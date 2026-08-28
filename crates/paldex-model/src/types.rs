@@ -61,18 +61,26 @@ pub enum Gender {
     Unknown,
 }
 
-/// Where a Pal sits, resolved against a specific player's container IDs.
+/// Where a Pal sits, resolved against a container id known to belong to
+/// someone.
 ///
-/// `SlotId` alone only gives an opaque container UUID + slot index; turning
-/// that into "Party" or "Box" requires knowing that player's
-/// `OtomoCharacterContainerId`/`PalStorageContainerId` (from their
-/// `Players/<uid>.sav`), which is a separate file — see [`PlayerProgress`].
-/// A Pal assigned to a base camp's own storage, or one whose container isn't
-/// any known player's, resolves to `Other`.
+/// `SlotId` alone only gives an opaque container UUID + slot index. Turning
+/// that into `Party` or `Box` requires a player's
+/// `OtomoCharacterContainerId`/`PalStorageContainerId`, which live in a
+/// separate file — see [`PlayerProgress`]. Turning it into `Base` requires a
+/// base camp's worker container id, which lives in yet another place, the
+/// `WorkerDirector` blob of `Level.sav`'s `BaseCampSaveData` (see
+/// `rawdata::base_camp`).
+///
+/// `Other` is what remains: a container belonging to no known player and no
+/// known base. Against a real save that set is empty, so an `Other` in
+/// practice means a container this code does not yet understand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum PalLocationKind {
     Party,
     Box,
+    /// Assigned to work at a base camp.
+    Base,
     Other,
 }
 
@@ -91,7 +99,14 @@ pub struct Pal {
     pub character_id: String,
     pub owner: Option<Uuid>,
     pub level: u8,
-    /// Souls condensing tier, 1..=5.
+    /// Souls condensing tier exactly as the save stores it: 1..=5, where 1 is
+    /// an uncondensed Pal (`Rank` absent ⇒ 1) and 5 is fully condensed.
+    ///
+    /// **The game displays this same scale as 0–4 stars**, so this value is
+    /// one higher than what the player sees. Deliberately left 1-based here —
+    /// the decoders mirror the save, and shifting it would put this field out
+    /// of step with the byte it comes from. The UI converts at the point of
+    /// display (`condenseStars` in the app's `types.ts`).
     pub rank: u8,
     pub souls: SoulUpgrades,
     pub ivs: Ivs,
