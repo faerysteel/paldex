@@ -48,13 +48,17 @@ export default function App() {
   }, [scan]);
 
   const chooseFolder = useCallback(async () => {
-    const picked = await open({
-      directory: true,
-      title: "Select your Palworld SaveGames folder",
-    });
-    if (typeof picked !== "string") return;
-
+    // `open` is inside the try, not above it: a rejection there used to escape
+    // as an unhandled promise, so a picker that failed to appear was
+    // indistinguishable from a dead button. Cancelling still returns a
+    // non-string and exits quietly, which is the one silent case we want.
     try {
+      const picked = await open({
+        directory: true,
+        title: "Select your Palworld SaveGames folder",
+      });
+      if (typeof picked !== "string") return;
+
       const roots = await invoke<SaveRootView[]>("resolve_folder", {
         path: picked,
       });
