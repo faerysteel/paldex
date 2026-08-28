@@ -11,6 +11,11 @@ repository.workspace = true
 dirs.workspace = true
 serde.workspace = true
 
+# Steam records its own install path in the registry; assuming C: misses any
+# other drive. Windows-only, so macOS builds never see it.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
 [dev-dependencies]
 serde_json.workspace = true
 

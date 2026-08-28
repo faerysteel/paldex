@@ -142,10 +142,8 @@ pub fn discover_paks() -> Vec<PathBuf> {
         }
     }
 
-    if cfg!(target_os = "windows") {
-        for root in ["C:/Program Files (x86)/Steam", "C:/Program Files/Steam"] {
-            paks.extend(scan_steam_libraries(Path::new(root)));
-        }
+    for root in steam_install_roots() {
+        paks.extend(scan_steam_libraries(&root));
     }
 
     paks.sort();
@@ -153,14 +151,110 @@ pub fn discover_paks() -> Vec<PathBuf> {
     paks
 }
 
-/// Check a Steam install root for the pak.
-fn scan_steam_libraries(steam_root: &Path) -> Vec<PathBuf> {
-    let candidate = PAK_TAIL.iter().fold(steam_root.to_path_buf(), |p, c| p.join(c));
-    if candidate.is_file() {
-        vec![candidate]
-    } else {
-        Vec::new()
+/// Where Steam itself might be installed.
+///
+/// Returns nothing off Windows: the macOS branch of [`discover_paks`] reaches
+/// Steam through a Wine bottle instead, where the prefix supplies the root.
+///
+/// The registry is the authority — Steam writes down where it actually landed —
+/// and the `C:` defaults are only a fallback for a machine where the key is
+/// missing or unreadable. Assuming `C:` was the original bug: it happened to be
+/// right on the test VM, so the failure looked like a library problem rather
+/// than a root problem.
+fn steam_install_roots() -> Vec<PathBuf> {
+    if !cfg!(target_os = "windows") {
+        return Vec::new();
     }
+    let mut roots = registry_steam_roots();
+    roots.push(PathBuf::from(r"C:\Program Files (x86)\Steam"));
+    roots.push(PathBuf::from(r"C:\Program Files\Steam"));
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// Steam's install path as recorded in the registry.
+///
+/// Three keys are consulted because which one is populated depends on who is
+/// asking. `HKCU\...\SteamPath` is per-user, so it reads empty for a process
+/// running as SYSTEM — observed directly on the test VM, where only the
+/// `HKLM` 32-bit view had a value. Reading all three costs nothing and avoids
+/// depending on the process's identity or bitness.
+#[cfg(windows)]
+fn registry_steam_roots() -> Vec<PathBuf> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+
+    const KEYS: &[(isize, &str, &str)] = &[
+        (HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath"),
+        (
+            HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\WOW6432Node\Valve\Steam",
+            "InstallPath",
+        ),
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam", "InstallPath"),
+    ];
+
+    KEYS.iter()
+        .filter_map(|(hive, subkey, value)| {
+            let raw: String = RegKey::predef(*hive).open_subkey(subkey).ok()?.get_value(value).ok()?;
+            // Steam writes SteamPath with forward slashes and InstallPath with
+            // backslashes; both are valid here, but an empty value is not.
+            (!raw.trim().is_empty()).then(|| PathBuf::from(raw.trim()))
+        })
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn registry_steam_roots() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// Check every Steam library reachable from an install root for the pak.
+fn scan_steam_libraries(steam_root: &Path) -> Vec<PathBuf> {
+    steam_libraries(steam_root)
+        .into_iter()
+        .map(|lib| PAK_TAIL.iter().fold(lib, |p, c| p.join(c)))
+        .filter(|candidate| candidate.is_file())
+        .collect()
+}
+
+/// Every library root reachable from a Steam install: the install itself, plus
+/// each `path` recorded in `steamapps/libraryfolders.vdf`.
+///
+/// Looking only inside `steam_root` finds Steam but routinely misses the game.
+/// Steam lets a library live on any drive, and a 39 GB install is exactly the
+/// thing people put on the roomy disk rather than the boot one — the observed
+/// case being Steam on `C:` with Palworld in `G:\SteamLibrary`. That layout is
+/// recorded *only* in `libraryfolders.vdf`, so without reading it the pak is
+/// invisible and the app silently drops to no species list and no artwork.
+fn steam_libraries(steam_root: &Path) -> Vec<PathBuf> {
+    let mut libraries = vec![steam_root.to_path_buf()];
+    let manifest = steam_root.join("steamapps").join("libraryfolders.vdf");
+    if let Ok(text) = fs::read_to_string(&manifest) {
+        libraries.extend(parse_library_paths(&text));
+    }
+    libraries.sort();
+    libraries.dedup();
+    libraries
+}
+
+/// Pull the library paths out of a `libraryfolders.vdf`.
+///
+/// A real VDF parser is not warranted for this: the file is machine-written
+/// with one `"path"  "<value>"` pair per library, and the only escaping that
+/// appears in it is the doubled backslash of a Windows path.
+fn parse_library_paths(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .filter_map(|line| {
+            // Splitting on the quote character yields the leading indent, the
+            // key, the gap between key and value, then the value.
+            let mut fields = line.split('"').skip(1);
+            (fields.next()? == "path").then_some(())?;
+            let value = fields.nth(1)?;
+            Some(PathBuf::from(value.replace("\\\\", "\\")))
+        })
+        .collect()
 }
 
 /// Container directories that hold Wine bottles, paired with whether they are Whisky.
@@ -331,6 +425,77 @@ mod tests {
     #[test]
     fn pak_discovery_skips_missing_installs() {
         assert!(scan_steam_libraries(Path::new("/nonexistent/steam")).is_empty());
+    }
+
+    /// Verbatim from the Windows test VM, where Steam sits on `C:` and Palworld
+    /// on `G:` — the layout that left the packaged build with no artwork.
+    const REAL_VDF: &str = r#"
+"libraryfolders"
+{
+	"0"
+	{
+		"path"		"C:\\Program Files (x86)\\Steam"
+		"label"		""
+		"apps"
+		{
+			"228980"		"128606066"
+		}
+	}
+	"1"
+	{
+		"path"		"G:\\SteamLibrary"
+		"label"		""
+		"apps"
+		{
+			"1623730"		"41175628606"
+		}
+	}
+}
+"#;
+
+    #[test]
+    fn library_paths_come_from_the_vdf_with_backslashes_unescaped() {
+        let paths = parse_library_paths(REAL_VDF);
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from(r"C:\Program Files (x86)\Steam"),
+                PathBuf::from(r"G:\SteamLibrary"),
+            ]
+        );
+    }
+
+    #[test]
+    fn library_paths_ignore_every_other_key() {
+        // `label` and the app-id lines are also quoted pairs, so a parser that
+        // just grabbed quoted values would pull them in as paths.
+        for path in parse_library_paths(REAL_VDF) {
+            let text = path.to_string_lossy().into_owned();
+            assert!(text.contains("Steam"), "not a library path: {text}");
+        }
+    }
+
+    #[test]
+    fn steam_libraries_finds_a_pak_outside_the_steam_root() {
+        let tmp = tempdir();
+        let steam = tmp.join("Steam");
+        let other = tmp.join("SecondDrive");
+        fs::create_dir_all(steam.join("steamapps")).unwrap();
+        fs::write(
+            steam.join("steamapps").join("libraryfolders.vdf"),
+            format!(
+                "\"libraryfolders\"\n{{\n\t\"0\"\n\t{{\n\t\t\"path\"\t\t\"{}\"\n\t}}\n}}\n",
+                other.display()
+            ),
+        )
+        .unwrap();
+
+        let pak = PAK_TAIL.iter().fold(other.clone(), |p, c| p.join(c));
+        fs::create_dir_all(pak.parent().unwrap()).unwrap();
+        fs::write(&pak, b"not really a pak").unwrap();
+
+        assert_eq!(scan_steam_libraries(&steam), vec![pak]);
+        cleanup(&tmp);
     }
 
     #[test]
