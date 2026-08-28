@@ -65,7 +65,6 @@ export default function Dex({ summary, playerUid }: Props) {
       if (!needle) return true;
       return (
         e.displayName.toLowerCase().includes(needle) ||
-        e.characterId.toLowerCase().includes(needle) ||
         e.elements.some((el) => el.name.toLowerCase().includes(needle)) ||
         e.workSuitabilities.some((w) => w.name.toLowerCase().includes(needle)) ||
         (e.dexLabel?.toLowerCase().includes(needle) ?? false)

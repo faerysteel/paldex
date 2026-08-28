@@ -99,7 +99,6 @@ export default function Roster({ summary, playerUid }: Props) {
       if (!needle) return true;
       return (
         speciesLabel(p).toLowerCase().includes(needle) ||
-        p.characterId.toLowerCase().includes(needle) ||
         p.elements.some((el) => el.name.toLowerCase().includes(needle)) ||
         passiveLabels(p).some((n) => n.toLowerCase().includes(needle)) ||
         (p.nickname?.toLowerCase().includes(needle) ?? false)

@@ -94,7 +94,6 @@ export default function Analysis({ summary, playerUid }: Props) {
     return selected.filter(
       (p) =>
         speciesLabel(p).toLowerCase().includes(needle) ||
-        p.characterId.toLowerCase().includes(needle) ||
         (p.nickname?.toLowerCase().includes(needle) ?? false) ||
         p.passiveNames.some((n) => n.toLowerCase().includes(needle)),
     );
