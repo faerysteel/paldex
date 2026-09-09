@@ -25,3 +25,6 @@ apps/paldex-app/public/__fixture__/
 
 # Python bytecode (tools/usmap)
 __pycache__/
+
+# Local-only usmap driver (Proxmox/VM specific; see tools/usmap/README.md)
+tools/usmap/*.local.sh

@@ -21,14 +21,24 @@ diff --git a/UnrealMappingsDumper/dllmain.cpp b/UnrealMappingsDumper/dllmain.cpp
 index 2d3fcc2..c1b6d1f 100644
 --- a/UnrealMappingsDumper/dllmain.cpp
 +++ b/UnrealMappingsDumper/dllmain.cpp
-@@ -10,8 +10,15 @@ void WINAPI Main(HMODULE Module)
+@@ -10,8 +10,25 @@ void WINAPI Main(HMODULE Module)
  	if constexpr (OpenConsole)
  	{
  		AllocConsole();
 -		FILE* f;
 -		freopen_s(&f, "CONOUT$", "w", stdout);
 +		FILE* f = nullptr;
-+		if (freopen_s(&f, "C:\\dumper\\dumper.log", "w", stdout) != 0 || !f)
++		// Log beside this DLL: the injector stages it where the game's account
++		// can write, so no path needs hardcoding here. TEMP is the fallback.
++		wchar_t self[MAX_PATH]{};
++		if (GetModuleFileNameW(Module, self, MAX_PATH))
++		{
++			std::wstring log(self);
++			log.resize(log.find_last_of(L'\\') + 1);
++			log += L"dumper.log";
++			_wfreopen_s(&f, log.c_str(), L"w", stdout);
++		}
++		if (!f)
 +		{
 +			wchar_t tmpdir[MAX_PATH]{};
 +			GetTempPathW(MAX_PATH, tmpdir);
