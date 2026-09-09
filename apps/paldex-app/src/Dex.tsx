@@ -195,9 +195,8 @@ export default function Dex({ summary, playerUid }: Props) {
  * The save records the tier directly, so trust it and fall back to the count
  * only for a snapshot ingested before tiers were stored. Capping the fallback
  * is what keeps the two answers agreeing: the stored tier is exactly
- * `min(captureCount, CAPTURE_BONUS_AT)` in every observed save, so the
- * fallback has to be capped the same way or a species caught many times would
- * read as an impossible tier.
+ * `min(captureCount, CAPTURE_BONUS_AT)`, so the fallback must use the same
+ * cap rather than presenting a high capture count as a bonus tier.
  */
 function bonusTier(entry: DexEntryView): number {
   return Math.min(Math.max(entry.bonusTier, entry.captureCount), CAPTURE_BONUS_AT);
@@ -407,8 +406,8 @@ function Tile({
         </span>
         {/* Below the top tier the capture count and the tier are the same
             number, so showing both would read "×3 3/5". Only a complete
-            species has a count worth stating on its own — a high capture count is
-            interesting, three captures is just the tier again. */}
+            species has a count worth stating separately; below that, the
+            capture count merely repeats the tier. */}
         <span className="dex-meta">
           {!entry.caught ? (
             <span className="dex-dash">—</span>

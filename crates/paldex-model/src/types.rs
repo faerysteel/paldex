@@ -183,10 +183,9 @@ pub struct MiscCounters {
 /// Captures of one species needed to complete its capture bonus, and equally
 /// the highest value `PlayerProgress::capture_bonus_tiers` ever takes.
 ///
-/// Not stated by any `DataTable` in the game pak — derived from a real save,
-/// where the tier is exactly `min(capture_count, 5)` across 529 species
-/// observations with no exception, and corroborated by the pak's own UI
-/// strings, which tier the capture EXP bonus at `_001`, `_005`, `_COMPLETE`.
+/// Not stated by any `DataTable` in the game pak — observed consistently in
+/// decoded saves as `min(capture_count, 5)`, and corroborated by the pak's own
+/// UI strings, which tier the capture EXP bonus at `_001`, `_005`, `_COMPLETE`.
 pub const CAPTURE_BONUS_AT: u32 = 5;
 
 /// Who a player *is*, from their in-world character entry in
@@ -224,8 +223,8 @@ pub struct PlayerProgress {
     ///
     /// Despite the name this is a *tier*, not a count of bonuses and not a
     /// boolean: it is `min(capture_count, 5)`, so tier 5 means the bonus is
-    /// complete and further captures add nothing. Verified against a real save
-    /// — see `capture_bonus_tier_is_capture_count_capped_at_five`.
+    /// complete and further captures add nothing. See
+    /// `capture_bonus_tier_is_capture_count_capped_at_five`.
     pub capture_bonus_tiers: HashMap<String, u32>,
     /// `UnlockedRecipeTechnologyNames`.
     pub unlocked_tech: Vec<String>,

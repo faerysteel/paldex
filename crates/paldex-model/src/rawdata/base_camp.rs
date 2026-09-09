@@ -23,12 +23,11 @@
 //! | 98 | 16 | the worker container id |
 //! | 114 | 4 | zero |
 //!
-//! Verified against a multiple decoded bases: the id at offset 0 equalled the map
-//! key every time, and the container at offset 98 accounted for every one of
-//! the unowned Pals belonging to no player, none left over and no Pal claimed
-//! twice. Bases without workers still carry a container id — an empty
-//! container, not an absent field — so a missing id means "did not decode",
-//! never "no workers". `tests/real_base_camps.rs` pins both claims.
+//! Verified across multiple decoded bases: the id at offset 0 matched the map
+//! key, and the container at offset 98 accounted for the unowned Pals without
+//! omissions or duplicate claims. Bases without workers still carry an empty
+//! container id rather than omitting the field, so a missing id means "did not
+//! decode", never "no workers". `tests/real_base_camps.rs` pins both claims.
 //!
 //! Two further fields decode cleanly but are deliberately unused: the base's
 //! own `RawData` holds a UTF-16 name at offset 16, which is the placeholder

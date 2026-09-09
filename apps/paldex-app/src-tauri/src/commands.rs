@@ -1374,10 +1374,10 @@ mod tests {
 
     /// Base pals are in by default, and the player scope has no say in it.
     ///
-    /// This replaces a rule that derived the answer from the scope, so that
-    /// picking a player silently dropped the 71 unowned base-camp workers from
-    /// the roster and analysis tabs while leaving them in breeding. The
-    /// checkbox is now the only input, on every tab, which is only true while
+    /// This replaces a rule that derived the answer from the scope: picking a
+    /// player silently dropped unowned base-camp workers from the roster and
+    /// analysis tabs while leaving them in breeding. The checkbox is now the
+    /// only input, on every tab, which is only true while
     /// `base_pals` ignores the scope entirely — hence a test rather than a
     /// comment.
     #[test]
@@ -1403,11 +1403,8 @@ mod tests {
     /// Capture progress is per player, and scoping to one must report *that
     /// player's* numbers rather than the world's best.
     ///
-    /// The bug this replaces: `dex_facts` aggregated with
-    /// `MAX(value) GROUP BY flag_key` and no `player_uid`, so a species one
-    /// player had caught many times and the other had never caught read as 447
-    /// for both. On the save this was written against that inflated the
-    /// bonus-complete count from different totals to a an inflated shared total.
+    /// The bug this replaces aggregated capture counts without `player_uid`,
+    /// allowing one player's progress to inflate another player's results.
     #[test]
     fn per_player_dex_facts_are_not_pooled_across_players() {
         let Some(world) = crate::sync::tests::real_trackable_world() else {

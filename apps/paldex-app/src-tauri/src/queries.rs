@@ -10,10 +10,9 @@ use serde::Serialize;
 /// not "filter or don't": most of what the game tracks — capture counts,
 /// capture bonuses, tech, quests — is *per player*, and silently aggregating
 /// it across a shared world invents a player who has everyone's progress at
-/// once. That is exactly the bug this type exists to make hard to write: the
-/// dex screen used to report `MAX(capture_count)` across players, which
-/// claimed too many species were at their capture bonus in a world where the two
-/// players were individually at different totals.
+/// once. That is exactly the bug this type exists to make hard to write:
+/// aggregating `MAX(capture_count)` across players allows one player's
+/// progress to inflate another player's results.
 ///
 /// [`All`](PlayerScope::All) is still right for genuinely world-level
 /// questions — "has anyone here caught this species" — so it stays available,

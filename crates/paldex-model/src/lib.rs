@@ -49,8 +49,8 @@ pub fn resolve_locations(pals: &mut [Pal], player: &PlayerProgress) {
 /// known player.** A Pal already resolved to `Party` or `Box` is left alone,
 /// so a player container that somehow also appeared as a worker container
 /// would keep the player's answer rather than being silently reassigned. The
-/// two sets are disjoint in decoded saves, so this guard should never fire — it is here so
-/// that if the assumption ever breaks, it degrades instead of corrupting.
+/// sets should be disjoint, so this guard is here to degrade safely instead of
+/// corrupting location data if that assumption ever breaks.
 pub fn resolve_base_locations(pals: &mut [Pal], bases: &[BaseCamp]) {
     let worker_containers: std::collections::HashSet<_> =
         bases.iter().filter_map(|b| b.worker_container_id).collect();

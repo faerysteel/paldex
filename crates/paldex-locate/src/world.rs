@@ -40,7 +40,7 @@ pub enum WorldKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct World {
-    /// Directory name, e.g. `11111111111111111111111111111111`.
+    /// Directory name, e.g. `0123456789ABCDEF0123456789ABCDEF`.
     pub id: String,
     pub path: PathBuf,
     pub kind: WorldKind,
@@ -166,8 +166,8 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Builds the exact shape observed on the development machine: one hosted world
-    /// with a full file set, five co-op guest stubs with only `LocalData.sav`.
+    /// Builds a representative shape: one hosted world with a full file set,
+    /// five co-op guest stubs with only `LocalData.sav`.
     fn realistic_root() -> PathBuf {
         let root = crate::tests::tempdir();
 
