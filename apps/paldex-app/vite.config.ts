@@ -6,6 +6,8 @@ const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
   plugins: [react()],
+  // Preview fixtures live under public/, but desktop bundles must never copy them.
+  publicDir: false,
 
   // Tauri owns the terminal output; don't let Vite wipe its messages.
   clearScreen: false,

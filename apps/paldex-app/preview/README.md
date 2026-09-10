@@ -116,7 +116,14 @@ belong to the guild rather than an individual player.
 
 ## Data handling
 
-Captured fixtures contain data derived from a personal save, including player
-identifiers and roster details. `apps/paldex-app/public/__fixture__/` is ignored
-by Git and must remain untracked. Delete that directory to remove all captured
-preview data.
+- Path: `apps/paldex-app/public/__fixture__/`
+- Contents: save-derived player identifiers and roster data
+- Git state: ignored and untracked
+- Production: excluded by `vite.config.ts` (`publicDir: false`)
+- Removal: delete the fixture directory
+
+Verify the production/preview boundary after changing either Vite config:
+
+```bash
+pnpm -C apps/paldex-app verify:packaging-boundary
+```

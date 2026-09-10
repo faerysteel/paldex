@@ -74,6 +74,19 @@ Save decoding and IV analysis remain available. The UI uses internal ids,
 retains human NPC rows, omits icons and species metadata, and shows only caught
 species in the dex. Breeding queries return no results.
 
+## Packaging boundary
+
+| Mode | Vite config | `publicDir` | Fixture result |
+| --- | --- | --- | --- |
+| Desktop production | `vite.config.ts` | `false` | Excluded from `dist` and Tauri bundles |
+| Browser preview | `vite.preview.config.ts` | `public/` | Served from `/__fixture__/` |
+
+```bash
+pnpm -C apps/paldex-app verify:packaging-boundary
+```
+
+The check uses a temporary sentinel and preserves existing fixture files.
+
 ## Development and verification
 
 Run from the repository root; see the [root README](../../README.md#requirements)
@@ -85,6 +98,7 @@ pnpm dev
 pnpm build
 pnpm typecheck
 pnpm -C apps/paldex-app lint
+pnpm -C apps/paldex-app verify:packaging-boundary
 cargo test -p paldex-app
 ```
 

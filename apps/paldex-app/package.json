@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "preview:ui": "vite --config vite.preview.config.ts",
+    "verify:packaging-boundary": "node scripts/check-packaging-boundary.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "tauri": "tauri"

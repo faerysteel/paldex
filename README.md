@@ -120,6 +120,73 @@ pnpm build
 The root scripts delegate frontend work to `apps/paldex-app` and Rust work to
 the Cargo workspace.
 
+## Release builds
+
+Workflow: `.github/workflows/release-builds.yml`
+
+| Event | Build artifacts | Draft release |
+| --- | --- | --- |
+| Pull request | Windows x64, macOS ARM64 | No |
+| Push to `main` | Windows x64, macOS ARM64 | No |
+| Manual dispatch | Windows x64, macOS ARM64 | No |
+| Push of matching `vMAJOR.MINOR.PATCH` tag | Windows x64, macOS ARM64 | Create or update |
+
+Manual dispatch is build-only, including dispatches against a tag.
+
+### Versioning
+
+Update these sources together:
+
+| Source | Field |
+| --- | --- |
+| `package.json` | `version` |
+| `apps/paldex-app/package.json` | `version` |
+| `apps/paldex-app/src-tauri/tauri.conf.json` | `version` |
+| `Cargo.toml` | `workspace.package.version` |
+
+```bash
+cargo check --workspace
+node .github/scripts/check-release-version.mjs
+```
+
+Commit the resulting `Cargo.lock` changes before tagging. Release tags must:
+
+- use canonical `vMAJOR.MINOR.PATCH` syntax
+- exactly match the committed version
+- omit leading zeros, prerelease suffixes, and build metadata
+
+```bash
+git tag vMAJOR.MINOR.PATCH
+git push origin vMAJOR.MINOR.PATCH
+```
+
+### Artifacts and publication
+
+| Target | Bundle | Signing |
+| --- | --- | --- |
+| Windows x64 | NSIS `.exe` | Unsigned |
+| macOS ARM64 | `.dmg` | Ad hoc; not notarized |
+
+- Workflow artifacts expire after 14 days.
+- A tag build verifies the remote tag resolves to the triggering commit.
+- The draft contains both installers and `SHA256SUMS`.
+- A rerun replaces only expected assets while the release is a draft.
+- A rerun refuses to modify a published release.
+- GitHub Release assets are not subject to workflow-artifact retention.
+- Publication is manual. No updater metadata is generated.
+
+### Pre-publication checks
+
+- Windows: install, launch without game/save data, record SmartScreen and
+  WebView2 behavior, uninstall.
+- macOS ARM64: mount, copy, inspect architecture and signature, then launch the
+  downloaded quarantined app and record Gatekeeper behavior.
+- Palworld host: verify save discovery and reference-data loading; do not upload
+  personal data or identifying logs.
+
+Hosted runners have no game or save data; real-data tests may skip. Unsigned and
+ad-hoc-signed builds may require manual OS trust approval.
+
 ## Validation
 
 Run the standard checks from the repository root:

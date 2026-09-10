@@ -1,0 +1,307 @@
+name: Release builds
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-builds-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.98.1
+
+jobs:
+  validate:
+    name: Validate version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+
+      - name: Validate committed versions and release tag
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: node .github/scripts/check-release-version.mjs
+
+      - name: Record validation environment
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          {
+            echo "### Release build validation"
+            echo "- Version: \`$VERSION\`"
+            echo "- Node: \`$(node --version)\`"
+            echo "- Rust: \`$(rustc --version)\`"
+            echo "- Revision: \`$GITHUB_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            runner: windows-2022
+            platform: windows
+            architecture: x86_64
+            target: x86_64-pc-windows-msvc
+            bundle: nsis
+            extension: .exe
+            installer-dir: target/x86_64-pc-windows-msvc/release/bundle/nsis
+          - label: macOS Apple Silicon
+            runner: macos-15
+            platform: macos
+            architecture: aarch64
+            target: aarch64-apple-darwin
+            bundle: dmg
+            extension: .dmg
+            installer-dir: target/aarch64-apple-darwin/release/bundle/dmg
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.33.4
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install JavaScript dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy --target "$TARGET"
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ${{ matrix.target }}-rust-1.98.1
+          workspaces: . -> target
+          cache-targets: true
+          cache-all-crates: false
+
+      - name: Type-check frontend
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: pnpm typecheck
+
+      - name: Lint frontend
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: pnpm -C apps/paldex-app lint
+
+      - name: Verify production fixture boundary
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: pnpm -C apps/paldex-app verify:packaging-boundary
+
+      - name: Lint Rust workspace
+        shell: bash
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test Rust workspace
+        shell: bash
+        run: cargo test --locked --workspace
+
+      - name: Build explicit Tauri installer
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos' && '-' || '' }}
+          BUNDLE: ${{ matrix.bundle }}
+          TARGET: ${{ matrix.target }}
+        run: pnpm build --ci --target "$TARGET" --bundles "$BUNDLE" -- --locked
+
+      - name: Verify macOS architecture and ad-hoc signature
+        if: matrix.platform == 'macos'
+        shell: bash
+        env:
+          DMG_DIR: target/aarch64-apple-darwin/release/bundle/dmg
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=("$DMG_DIR"/*.dmg)
+          [[ "${#dmgs[@]}" == 1 ]]
+          mount_point="$RUNNER_TEMP/paldex-dmg"
+          mkdir "$mount_point"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_point" "${dmgs[0]}"
+          trap 'hdiutil detach "$mount_point"' EXIT
+          app="$mount_point/Paldex.app"
+          test -d "$app"
+          [[ "$(lipo -archs "$app/Contents/MacOS/paldex-app")" == arm64 ]]
+          codesign --verify --deep --strict "$app"
+          details="$(codesign -dv --verbose=4 "$app" 2>&1)"
+          printf '%s\n' "$details"
+          [[ "$details" == *"Signature=adhoc"* ]]
+          [[ "$details" != *"Authority="* ]]
+
+      - name: Collect the only allowed installer
+        id: installer
+        shell: bash
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          EXPECTED_DIR: ${{ matrix.installer-dir }}
+          EXTENSION: ${{ matrix.extension }}
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: node .github/scripts/collect-installer.mjs
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: paldex-${{ matrix.platform }}-${{ matrix.architecture }}-${{ needs.validate.outputs.version }}-${{ github.sha }}
+          path: ${{ steps.installer.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Record build environment
+        if: always()
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          {
+            echo "### ${{ matrix.label }}"
+            echo "- Runner: \`${{ matrix.runner }}\`"
+            echo "- Target: \`$TARGET\`"
+            echo "- Node: \`$(node --version 2>/dev/null || echo unavailable)\`"
+            echo "- pnpm: \`$(pnpm --version 2>/dev/null || echo unavailable)\`"
+            echo "- Rust: \`$(rustc --version 2>/dev/null || echo unavailable)\`"
+            echo "- Real-data tests may skip because hosted runners have no Palworld saves or pak."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  draft-release:
+    name: Assemble draft release
+    if: >-
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/') &&
+      needs.validate.result == 'success' &&
+      needs.build.result == 'success'
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows installer from this run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: paldex-windows-x86_64-${{ needs.validate.outputs.version }}-${{ github.sha }}
+          path: incoming/windows
+
+      - name: Download macOS installer from this run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: paldex-macos-aarch64-${{ needs.validate.outputs.version }}-${{ github.sha }}
+          path: incoming/macos
+
+      - name: Validate assets and update draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          windows="incoming/windows/Paldex-${VERSION}-windows-x86_64-setup.exe"
+          macos="incoming/macos/Paldex-${VERSION}-macos-aarch64.dmg"
+          test -f "$windows"
+          test -f "$macos"
+          test "$(find incoming -type f | wc -l | tr -d ' ')" = 2
+
+          mkdir release-assets
+          mv "$windows" "$macos" release-assets/
+          (
+            cd release-assets
+            sha256sum "$(basename "$macos")" "$(basename "$windows")" | sort -k2 > SHA256SUMS
+          )
+          test "$(find release-assets -type f | wc -l | tr -d ' ')" = 3
+          (cd release-assets && sha256sum --check SHA256SUMS)
+
+          ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}")"
+          object_type="$(jq -r '.object.type' <<< "$ref")"
+          object_sha="$(jq -r '.object.sha' <<< "$ref")"
+          for _ in 1 2 3 4; do
+            [[ "$object_type" != tag ]] && break
+            tag_object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")"
+            object_type="$(jq -r '.object.type' <<< "$tag_object")"
+            object_sha="$(jq -r '.object.sha' <<< "$tag_object")"
+          done
+          if [[ "$object_type" != commit || "$object_sha" != "$GITHUB_SHA" ]]; then
+            echo "Remote tag $RELEASE_TAG does not resolve to triggering commit $GITHUB_SHA." >&2
+            exit 1
+          fi
+
+          releases="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" | jq -s --arg tag "$RELEASE_TAG" '[.[][] | select(.tag_name == $tag)]')"
+          count="$(jq 'length' <<< "$releases")"
+          if [[ "$count" -gt 1 ]]; then
+            echo "More than one release exists for tag $RELEASE_TAG." >&2
+            exit 1
+          fi
+          if [[ "$count" == 1 ]]; then
+            if [[ "$(jq -r '.[0].draft' <<< "$releases")" != true ]]; then
+              echo "Release $RELEASE_TAG is already published; refusing to replace its assets." >&2
+              exit 1
+            fi
+          else
+            body="Windows x64 is unsigned. macOS Apple Silicon uses ad-hoc signing and is not notarized. Both platforms may show operating-system trust warnings and require manual approval during installation. No updater metadata is included."
+            jq -n \
+              --arg tag "$RELEASE_TAG" \
+              --arg sha "$GITHUB_SHA" \
+              --arg name "Paldex ${VERSION}" \
+              --arg body "$body" \
+              '{tag_name: $tag, target_commitish: $sha, name: $name, body: $body, draft: true, prerelease: false, generate_release_notes: true, make_latest: "false"}' \
+              | gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" --input - > /dev/null
+          fi
+
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
+
+          {
+            echo "### Draft release"
+            echo "- Tag: \`$RELEASE_TAG\`"
+            echo "- Revision: \`$GITHUB_SHA\`"
+            echo "- Assets: Windows x64 installer, macOS Apple Silicon DMG, and SHA256SUMS"
+            echo "- The release remains a draft for manual installation review and publication."
+          } >> "$GITHUB_STEP_SUMMARY"
