@@ -118,8 +118,7 @@ pub struct Pal {
     pub is_lucky: bool,
     /// `BOSS_` prefix on `CharacterID` — an alpha/boss spawn.
     pub is_boss: bool,
-    /// `PREDATOR_` prefix on `CharacterID`. Not observed in this session's
-    /// fixture world; documented in the plan alongside `is_boss`.
+    /// `PREDATOR_` prefix on `CharacterID`.
     pub is_predator: bool,
     pub nickname: Option<String>,
     /// `None` for a Pal whose `SlotId` field was absent (e.g. mid-transfer).
@@ -155,10 +154,10 @@ pub struct Collectibles {
     pub treasures_found: u32,
 }
 
-/// `OrderedQuestArray_FullRelease`/`CompletedQuestArray_FullRelease` — both
-/// `Array<Struct>` at the `SaveData` level (not `RecordData`); each element
-/// carries a quest id. Kept as raw id strings — quest metadata (names,
-/// objectives) is Phase 3 reference-data territory.
+/// Quest identifiers from `SaveData`, retained without display metadata.
+///
+/// `OrderedQuestArray_FullRelease` is `Array<Struct>` with `QuestName` fields;
+/// `CompletedQuestArray_FullRelease` is `Array<Name>`.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct QuestState {
     pub ordered_quest_ids: Vec<String>,

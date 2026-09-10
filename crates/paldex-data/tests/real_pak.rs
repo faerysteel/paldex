@@ -36,9 +36,8 @@ fn opens_the_real_pak_and_matches_verified_header_facts() {
 
     assert_eq!(pak.mount_point(), "../../../");
     assert!(!pak.encrypted_index());
-    // Verified during Phase 3 research: exactly 185,003 entries. A real game
-    // patch could change this, but a wildly different count would indicate
-    // the index parse desynced rather than a legitimate content update.
+    // Allow content updates around the 185,003-entry reference pak while
+    // rejecting implausible counts from a misparsed index.
     let count = pak.files().len();
     assert!(
         (150_000..250_000).contains(&count),

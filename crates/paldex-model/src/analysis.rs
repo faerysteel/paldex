@@ -1,13 +1,7 @@
-//! Derived-insight layer over decoded [`Pal`]s — the reason to use this over
-//! the in-game menus, per the plan.
+//! Derived analysis over decoded [`Pal`] records.
 //!
-//! Everything here works on Phase 2's decoded save data alone, with one
-//! exception: [`breeding_suggestions`] needs the pak's breeding table, which
-//! lives in `paldex-data`. Rather than depend on that crate — this one is the
-//! save decoder and has no business reading the game's install — the caller
-//! injects the lookup as a closure. The app layer, where both crates are
-//! already in scope, passes `ReferenceIndex::breeding_result`; the tests below
-//! pass a hand-built table.
+//! Save-derived analysis with an injected breeding-result lookup.
+//! The app supplies pak-derived results; this crate does not access game files.
 
 use std::collections::{HashMap, HashSet};
 
@@ -15,19 +9,8 @@ use serde::Serialize;
 
 use crate::types::{Gender, Ivs, Pal};
 
-/// A Pal's composite IV score: the unweighted mean of its three talents, so
-/// it lands on the same 0–100 scale they do.
-///
-/// This used to also bucket the score into a D/C/B/A/S/Perfect tier. That was
-/// removed: the thresholds were an arbitrary judgment call rather than an
-/// in-game mechanic, and printing a made-up letter next to the real number it
-/// came from added nothing the number did not already say.
-///
-/// Monotonic by construction: a mean can never decrease when one of its
-/// inputs increases and the others hold steady, so a Pal that is at least as
-/// good as another in every talent, and strictly better in one, always
-/// scores at least as high — see `tests::grading_is_monotonic` for the
-/// property test the plan calls for.
+/// Unweighted mean of HP, shot, and defense IVs; 0–100 for valid model inputs.
+/// Increasing one input while holding the others fixed cannot decrease the score.
 #[must_use]
 pub fn grade_ivs(ivs: &Ivs) -> f32 {
     (f32::from(ivs.hp) + f32::from(ivs.shot) + f32::from(ivs.defense)) / 3.0
@@ -642,8 +625,7 @@ mod tests {
         }
     }
 
-    /// The plan's Phase 6 criterion: a suggestion the player cannot act on is
-    /// worse than no suggestion.
+    /// Suggestions must reference Pals present in the supplied owned roster.
     #[test]
     fn breeding_suggestions_only_reference_owned_pals() {
         let pals = vec![

@@ -35,10 +35,8 @@ fn real_index() -> Option<ReferenceIndex> {
     ReferenceIndex::extract(&mut pak, "en").ok()
 }
 
-/// The bundled mappings must match what `tools/usmap/regen-usmap.sh` produces.
-///
-/// Counts rather than a hash: the dumper emits its name table in hash-map
-/// order, so two good runs differ in sha256 but never in these totals.
+/// Validate bundled schema counts, enum values, and the character-row layout.
+/// Name-table ordering may vary between dumper runs, so a byte hash is unsuitable.
 #[test]
 fn bundled_usmap_parses_with_the_expected_shape() {
     let usmap = Usmap::parse(MAPPINGS).expect("bundled Mappings.usmap should parse");

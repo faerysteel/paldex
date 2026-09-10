@@ -1,9 +1,12 @@
-//! One decoder per known `RawData`-bearing container, dispatched by the
-//! plan's phase-2 table. Only `character` is implemented so far; the rest
-//! (`GroupSaveDataMap`, `CharacterContainerSaveData`, `ItemContainerSaveData`,
-//! `DynamicItemSaveData`, `BaseCampSaveData`, `WorkSaveData`,
-//! `MapObjectSaveData`) are follow-up work. `FoliageGridSaveDataMap` is
-//! deliberately never decoded — large, no tracker value.
+//! Decoders for Palworld-specific data embedded in GVAS containers.
+//!
+//! - `character`: `CharacterSaveParameterMap` nested tagged-property lists.
+//! - `player`: standalone player GVAS records.
+//! - `guild`: `GroupSaveDataMap` metadata and best-effort binary id extraction.
+//! - `base_camp`: `BaseCampSaveData` guild and worker-container ids.
+//!
+//! Character/item containers, dynamic items, work state, map objects, and
+//! foliage are not domain-decoded.
 
 pub mod base_camp;
 pub mod character;

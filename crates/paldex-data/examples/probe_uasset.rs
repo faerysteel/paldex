@@ -1,10 +1,7 @@
-//! Dev-only: probe a cooked `.uasset`'s package summary and name table.
+//! Probe cooked package summaries and name tables.
+//! Detects unversioned properties via `PKG_UnversionedProperties`, not versions.
 //!
-//! The load-bearing question for Phase 3 is whether the package uses
-//! *unversioned* property serialization (which needs a `.usmap` schema) or
-//! ordinary tagged properties (which don't). The authoritative signal is the
-//! `PKG_UnversionedProperties` bit in `FPackageFileSummary.PackageFlags`, not
-//! the file-version fields.
+//! Usage: `cargo run -p paldex-data --example probe_uasset -- <pak> [substring]`
 use std::env;
 use std::path::Path;
 

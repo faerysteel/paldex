@@ -1,6 +1,5 @@
-//! Integration tests joining the pak-derived reference data against the real
-//! save — the plan's Phase 3 gate: *every* distinct `CharacterID` in the
-//! fixture world must resolve, with zero misses.
+//! Integration tests joining pak-derived reference data against a real save.
+//! Every distinct `CharacterID` in the fixture world must resolve.
 //!
 //! Both the pak and the save are resolved from the local install (or the
 //! `PALDEX_TEST_PAK` / `PALDEX_TEST_SAVE_DIR` overrides). Tests skip rather
@@ -99,7 +98,7 @@ fn extracts_a_plausible_reference_index_from_the_real_pak() {
     );
 }
 
-/// The plan's zero-miss gate.
+/// Every character identifier in the save must resolve against the pak.
 #[test]
 fn every_character_id_in_the_real_save_resolves() {
     let index = require!(reference_index(), "game pak");
@@ -125,9 +124,7 @@ fn every_character_id_in_the_real_save_resolves() {
     );
 }
 
-/// Phase 2 deliberately left human NPCs in the Pal bucket because the save
-/// alone can't distinguish them. The pak can, so the known offenders from that
-/// investigation must now classify as NPCs.
+/// Pak-derived classification separates known human NPCs from Pal species.
 #[test]
 fn known_human_npcs_are_classified_out_of_the_pal_roster() {
     let index = require!(reference_index(), "game pak");

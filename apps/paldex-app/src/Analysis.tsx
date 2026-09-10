@@ -29,16 +29,8 @@ interface Props {
 }
 
 /**
- * The derived-insight screen: IV grades, which specimen of each species to
- * keep, which duplicates to condense, and how owned Pals rank by passives.
- * The breeding search is its own tab — see `Breeding.tsx`.
- *
- * Every number shown is an input to a recommendation rather than a verdict —
- * the plan asks for suggestions the player can check, so the composite score
- * and the passives a pairing would draw from are on screen next to the
- * suggestion they produced. The letter tiers that used to sit beside the
- * score are gone: they were our thresholds, not the game's, and restated the
- * number without adding to it.
+ * IV scores, best-of-species specimens, condensation candidates, and
+ * passive-count rankings. Breeding pairings are in `Breeding.tsx`.
  */
 export default function Analysis({ summary, playerUid }: Props) {
   const [quality, setQuality] = useState<PalQualityView | null>(null);

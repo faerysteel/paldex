@@ -86,8 +86,7 @@ fn every_iv_is_in_range() {
     let result = decode_character_map(&entries);
 
     for pal in &result.pals {
-        // u8 is always <= 255, but the point is documenting + asserting the
-        // domain invariant explicitly, the way the plan's success criteria ask.
+        // Valid IVs occupy 0..=100, a subset of the u8 storage range.
         assert!(pal.ivs.hp <= 100, "{}: HP IV {} out of range", pal.character_id, pal.ivs.hp);
         assert!(
             pal.ivs.shot <= 100,
@@ -111,9 +110,7 @@ fn lucky_pal_count_is_plausible() {
 
     let lucky = result.pals.iter().filter(|p| p.is_lucky).count();
     eprintln!("lucky pals: {lucky} of {}", result.pals.len());
-    // The plan's research pass found ~19 in an earlier snapshot of this same
-    // world; natural play grows/shrinks this, so assert a sane range rather
-    // than the stale exact figure.
+    // Allow count changes from ordinary play rather than pinning a snapshot.
     assert!(lucky < result.pals.len() / 10 + 5, "suspiciously many lucky pals: {lucky}");
 }
 

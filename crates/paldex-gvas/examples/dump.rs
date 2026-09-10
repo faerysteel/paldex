@@ -1,12 +1,7 @@
-//! Debug dump: decompress and parse a real `.sav` file, printing it as JSON.
+//! Decompress a `.sav` and print decoded data.
 //!
-//! This is the manual-verification aid called for in Phase 0's plan: something to
-//! eyeball a save's parsed shape against what the game itself reports. For
-//! `Level.sav` specifically — too large to dump in full — it prints the top-level
-//! property names plus one fully-decoded character record, re-parsing that
-//! character's `RawData` blob (opaque to the main parser by design; see the
-//! `value` module docs) so there's something concrete to spot-check a Pal's
-//! species/level/IVs against what's shown in-game.
+//! World saves: property names, character count, and the first character's
+//! reparsed `RawData` as JSON. Other saves: the full property tree as JSON.
 //!
 //! Usage: `cargo run -p paldex-gvas --example dump -- <path/to/save.sav>`
 use std::env;

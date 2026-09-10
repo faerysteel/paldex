@@ -1,10 +1,7 @@
 //! Minimal reader for cooked Unreal `.uasset` package headers.
 //!
-//! Only what Phase 3 actually needs: the package flags (to know whether
-//! property values require a `.usmap` schema) and the **name table**, which is
-//! stored as plain `FString`s regardless of whether the package uses
-//! unversioned property serialization. That distinction is the whole reason
-//! this module is useful — see [`crate::reference`] for the full writeup.
+//! Reads package flags, name tables, and import/export metadata.
+//! Name tables remain readable without an unversioned-property schema.
 
 /// `EPackageFlags::PKG_UnversionedProperties` — when set, property *values* in
 /// this package are serialized without names/types and need a `.usmap` schema.
@@ -54,9 +51,8 @@ impl PackageSummary {
     }
 }
 
-/// A bounds-checked little-endian byte reader. Every accessor returns `Result`
-/// so that truncated or corrupt package data surfaces as an error rather than
-/// a panic — the plan makes "no panics on truncated input" an explicit gate.
+/// Little-endian byte reader. Reads are bounds-checked and return
+/// [`UassetError::Truncated`] on insufficient input.
 pub struct Reader<'a> {
     bytes: &'a [u8],
     pos: usize,

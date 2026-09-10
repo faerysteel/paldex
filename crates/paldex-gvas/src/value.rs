@@ -70,10 +70,7 @@ pub enum Value {
     Array(Vec<Value>),
     Map(Vec<(Value, Value)>),
     Set(Vec<Value>),
-    /// Bytes this reader doesn't decode further: `ArrayProperty<ByteProperty>`
-    /// (Palworld's `RawData` fields — nested guild/inventory/base-camp blobs
-    /// left for Phase 2's dedicated decoders), and the safe fallback for any
-    /// property type or struct this reader doesn't specifically understand.
+    /// Undecoded byte arrays (including `RawData`) or unsupported property values.
     Raw(Vec<u8>),
 }
 

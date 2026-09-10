@@ -4,29 +4,23 @@ This crate is a vendored, modified copy of [trumank/repak](https://github.com/tr
 (commit `355b5f6`), dual-licensed MIT/Apache-2.0 (see `LICENSE-MIT` and
 `LICENSE-APACHE`).
 
-## Why vendored rather than a dependency
+## Vendoring rationale
 
-`repak`'s `Entry` type — which carries a file's offset, compression blocks,
-and sizes inside the pak — is `pub(crate)`, so there's no way to read a pak's
-raw entry metadata from outside the crate; the only public API
-(`PakReader::get`/`read_file`) does decompression internally. For every
-compression method except Oodle that's fine. For Oodle it isn't: `repak`'s
-`oodle` feature loads the game's native `oo2core_*.dll` via `oodle_loader`,
-which is Windows-only and can't be used to read Palworld's own pak on Apple
-Silicon — the same constraint that shaped `paldex-sav`'s Phase 1 design (see
-that crate's docs).
+`repak::Entry` is crate-private. Public entry reads (`PakReader::get` and
+`read_file`) perform decompression internally, so callers cannot replace the
+Oodle decoder without modifying the crate.
 
-## What changed
+The upstream `oodle` feature uses `oodle_loader` to load a native `oo2core`
+library. This fork uses the pure-Rust `oozextract` decoder to support Apple
+Silicon without a native Oodle library, as `paldex-sav` does for save files.
 
-- `entry.rs`: the `Oodle` decompression branch now calls
-  `oozextract::Extractor` (a pure-Rust, clean-room Kraken/Mermaid/Selkie/
-  Leviathan decoder, already verified against real Palworld save files in
-  `paldex-sav`) instead of `oodle_loader::oodle()`.
-- `data.rs`: the `Oodle` *compression* branch (used only when writing paks)
-  is left unsupported — `oozextract` has no encoder, and paldex never writes
-  paks, only reads the game's own.
-- `Cargo.toml`: dropped the `oodle_loader` path dependency and the `oodle`
-  feature; Oodle decompression is unconditional now, since it no longer
-  depends on anything platform-specific.
+## Patch scope
 
-Otherwise this is upstream `repak`'s footer/index/entry parsing, unmodified.
+| File | Change |
+| --- | --- |
+| `src/entry.rs` | Decode Oodle blocks with `oozextract::Extractor` |
+| `src/data.rs` | Return an error for Oodle compression; no encoder is provided |
+| `src/error.rs` | Report unsupported Oodle writing |
+| `Cargo.toml` | Replace `oodle_loader` and the `oodle` feature with an unconditional `oozextract` dependency; use workspace package metadata |
+
+Paldex reads existing paks; it does not write them.

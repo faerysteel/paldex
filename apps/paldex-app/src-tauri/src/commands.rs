@@ -92,17 +92,11 @@ struct SelectedWorld {
 /// Resync button gets back, so the UI can treat both paths identically.
 pub const SNAPSHOT_EVENT: &str = "paldex://snapshot";
 
-/// Watch the selected world's save directory and re-ingest on every in-game
-/// save, emitting [`SNAPSHOT_EVENT`] when the content actually changed.
+/// Start a detached watcher for the selected world and signal the previous
+/// watcher to stop. In-flight work may finish before the stop is observed.
 ///
-/// This is the plan's headline behaviour — "re-syncs within ~10s of every
-/// in-game save, no user action". The watcher runs on its own detached thread
-/// because `watch_until` blocks; the app owns a stop flag so that selecting a
-/// different world tears the previous one down instead of leaving it
-/// re-ingesting behind the new selection.
-///
-/// Failure to start is reported but never fatal: the manual Resync button
-/// remains, so a world that can't be watched is degraded, not broken.
+/// Changed snapshots emit [`SNAPSHOT_EVENT`]. Startup errors are logged;
+/// manual resync remains available.
 fn start_watcher(app: &AppHandle, state: &State<AppState>, world: World) {
     let stop = Arc::new(AtomicBool::new(false));
     match state.watcher.lock() {
@@ -126,10 +120,8 @@ fn start_watcher(app: &AppHandle, state: &State<AppState>, world: World) {
             WatchConfig::default(),
             &stop,
             |path, _bytes| {
-                // `watch_until` hands over the stability-checked bytes, but a
-                // full sync needs `Players/*.sav` too, so it re-reads the world
-                // rather than using them. The stability check is still what
-                // keeps this from firing mid-write.
+                // Full sync re-reads the world, including player saves.
+                // This size check reduces torn reads but cannot prevent them.
                 eprintln!("[paldex] watcher: {} changed", path.display());
                 on_watched_change(&app, &world);
             },
@@ -336,13 +328,10 @@ pub fn force_resync(app: AppHandle, state: State<AppState>) -> Result<SnapshotSu
     with_store(&app, &state, |store| queries::snapshot_summary(store, snapshot_id))
 }
 
-/// The currently selected world's Pal roster, with localized species names.
+/// Query the selected world's Pal roster.
 ///
-/// Human NPCs are excluded: the save gives them the same shape as Pals (they
-/// carry full IV stats), so Phase 2 can't tell them apart and they would
-/// otherwise show up as roster entries. The pak can — see `paldex-data`'s
-/// reference docs. Without a pak nothing is filtered or renamed, which is the
-/// pre-existing behaviour.
+/// With reference data, excludes known human NPCs and attaches localized names.
+/// Without it, NPC rows remain and the UI falls back to internal ids.
 ///
 /// # Errors
 ///
@@ -1535,8 +1524,8 @@ mod tests {
         );
     }
 
-    /// Phase 1's model-level partition test, re-asserted at the query level:
-    /// the bases between them claim every ownerless Pal, exactly once each.
+    /// Reasserts the model-level partition invariant at the query boundary:
+    /// the bases between them claim every ownerless Pal exactly once.
     ///
     /// This is the assertion that catches a break anywhere in the chain —
     /// decode, ingest, or join — rather than only in the decoder.
@@ -1687,8 +1676,8 @@ mod tests {
             }
         }
 
-        // The plan's criterion, restated against real data: condensing must
-        // never eat the specimen worth keeping.
+        // Condense candidates must never include the best specimen of a
+        // species.
         let best: std::collections::HashSet<&String> = view.best_of_species.iter().collect();
         assert!(
             !view.condense_candidates.iter().any(|id| best.contains(id)),
@@ -2674,8 +2663,7 @@ mod tests {
         );
     }
 
-    /// The plan's Phase 7 criterion: every unlocked tech name should resolve to
-    /// a reference definition.
+    /// Every unlocked technology should resolve to a reference definition.
     #[test]
     fn enrichment_names_unlocked_technologies() {
         let (Some((_, mut flags)), Some(loaded)) = (real_snapshot(), load_reference()) else {

@@ -103,8 +103,7 @@ fn the_dps_file_is_the_extreme_decompression_ratio_case() {
     let raw = std::fs::read(dps_path).unwrap();
     let (gvas, _) = paldex_sav::decompress(&raw).unwrap();
 
-    // Documented in the plan: ~42 KB compresses to ~73 MB, a ~1,740x ratio. Assert the
-    // shape rather than exact bytes, since box contents vary run to run.
+    // Check high-ratio decompression without pinning mutable box contents.
     assert!(
         gvas.len() > raw.len() * 100,
         "_dps.sav ({} bytes) did not expand into the expected decompression-bomb shape ({} bytes)",

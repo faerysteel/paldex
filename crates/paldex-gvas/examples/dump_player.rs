@@ -1,7 +1,7 @@
-//! Dev-only: decompress and parse a real `Players/<uid>.sav`, printing its
-//! top-level structure. The interesting data hangs off a `RecordData` struct
-//! per the plan; this prints field names/types first so a decoder can be
-//! grounded in the real shape before being written.
+//! Dump a `Players/<uid>.sav`: root and `SaveData` field names, selected values,
+//! `RecordData` field types, and sample map entries.
+//!
+//! Usage: `cargo run -p paldex-gvas --example dump_player -- <Players/uid.sav>`
 use std::env;
 use std::fs;
 

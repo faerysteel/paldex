@@ -5,13 +5,7 @@
 //! neither yields a trackable (hosted) world, every test here skips rather than
 //! failing, so CI and machines without Palworld installed stay green.
 //!
-//! The plan this crate was built from records "1,985" `PalIndividualCharacterSaveParameter`
-//! records as a point-in-time fact from one research session. That count is *not*
-//! asserted exactly here: it grows and shrinks as the player catches, breeds, and
-//! releases Pals, so pinning it would make this test fail the next time someone
-//! plays the game rather than when the parser actually breaks. A generous sanity
-//! range catches the failure modes that matter (empty map, wildly wrong count from
-//! a desync) without coupling the test to world state.
+//! Character counts use a broad sanity range because ordinary play changes them.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -141,8 +135,7 @@ fn every_character_carries_a_raw_data_blob_left_undecoded() {
         let raw_data = fields.iter().find(|p| p.name == "RawData");
         assert!(
             matches!(raw_data.map(|p| &p.value), Some(Value::Raw(_))),
-            "RawData missing or not left as Value::Raw — Phase 2's job is to decode it, \
-             not Phase 1's"
+            "RawData missing or not left for the domain-specific decoder"
         );
     }
 }

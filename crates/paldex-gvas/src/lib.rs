@@ -7,12 +7,9 @@
 //! - [`value`] — the tagged-property list that follows it, recursively covering
 //!   scalars, structs, arrays, maps, and sets.
 //!
-//! Every property tag declares its own value's byte length, which this reader
-//! leans on heavily for robustness: a struct, array, or map whose internal shape
-//! isn't fully understood degrades to [`Value::Raw`] rather than corrupting the
-//! properties that follow it. `RawData` — Palworld's own nested guild/inventory/
-//! base-camp blobs — is *always* opaque here by design; decoding it is Phase 2's
-//! job.
+//! Property value lengths bound decoding. Unsupported shapes fall back to
+//! [`Value::Raw`]. Byte arrays, including Palworld's `RawData` blobs, remain
+//! opaque; supported domain-specific payloads are decoded by `paldex-model`.
 
 mod cursor;
 mod header;

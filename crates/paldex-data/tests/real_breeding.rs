@@ -226,16 +226,8 @@ fn self_breeding_identifies_exactly_the_producible_species() {
     );
 }
 
-/// The plan's Phase 6 criterion, over the whole table rather than a handful of
-/// pairs: `combo(a, b) == combo(b, a)` for every species combination.
-///
-/// `unique_combos_produce_their_documented_child` already checks four unique
-/// rows both ways, but those take the `unique` map's early return — the
-/// generic `CombiRank` path, which is what the great majority of pairs
-/// actually use, was never checked for order-independence. It is symmetric by
-/// construction (the target is an average and the tie-break reads only the
-/// candidate pool), so this guards the construction rather than hunting a
-/// known bug.
+/// Every named-species pair must return the same result in either order,
+/// covering both authored exceptions and the generic `CombiRank` rule.
 #[test]
 fn breeding_is_order_independent_for_every_pair() {
     let index = index!();

@@ -1,13 +1,8 @@
-//! Reads the game's own installed `.pak` file for reference data extraction —
-//! species names, elements, work suitabilities, passive-skill definitions,
-//! and icon artwork — at build/extraction time, from the user's own install.
+//! Runtime reference-data extraction from the installed game pak.
 //!
-//! Verified against the real `Pal-Windows.pak` on this machine: version 11,
-//! magic `0x5A6F12E1`, `bEncryptedIndex = 0` (no AES key needed), mount point
-//! `../../../`, 185,003 entries. Uses [`repak_oodle`] (a vendored, patched
-//! copy of `trumank/repak` — see that crate's `NOTICE.md`) for the pak
-//! container format, and `oozextract` (via `repak_oodle`) for Oodle
-//! decompression, the same decoder already verified in `paldex-sav`.
+//! Uses [`repak_oodle`] for pak access and its pure-Rust `oozextract` backend
+//! for Oodle decompression. Names, stats, breeding data, and artwork are read
+//! locally; the property schema is bundled as [`BUNDLED_MAPPINGS`].
 
 use std::fs::File;
 use std::io::{BufReader, Seek};
@@ -27,9 +22,8 @@ pub use extract::{ExtractError, ReferenceIndex, TEXT_LANGUAGES};
 /// The property schema for Palworld's cooked packages, bundled because the
 /// game ships none of its own.
 ///
-/// Regenerate with `tools/usmap/regen-usmap.sh` after a game update; see that
-/// directory's README for why the stock mappings dumper needs patching for
-/// this build.
+/// Regenerate after a game update with `tools/usmap/regen-usmap.ps1`; see
+/// `tools/usmap/README.md` for the patched dumper workflow.
 pub const BUNDLED_MAPPINGS: &[u8] = include_bytes!("../data/Mappings.usmap");
 pub use reference::{PassiveSkill, PassthroughReferenceData, ReferenceData, Species};
 pub use repak_oodle::{PakBuilder, PakReader};

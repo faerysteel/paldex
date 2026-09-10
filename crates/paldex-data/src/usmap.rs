@@ -1,13 +1,10 @@
 //! Reader for Unreal `.usmap` mappings files.
 //!
-//! A `.usmap` is the property schema that unversioned cooked packages omit.
-//! Palworld's `DataTable`s set `PKG_UnversionedProperties`, so their rows carry
-//! values with no names or types attached — they are matched positionally
-//! against the compiled class layout. This file supplies that layout, which is
-//! what makes [`crate::datatable`] possible at all.
+//! Supplies the positional property schema omitted by unversioned cooked
+//! packages, including the rows decoded by [`crate::datatable`].
 //!
-//! Generate one with `tools/usmap/regen-usmap.sh`; see that directory's README
-//! for why the stock dumper needs patching for this build.
+//! Generate one with `tools/usmap/regen-usmap.ps1`; see
+//! `tools/usmap/README.md` for the patched dumper workflow.
 //!
 //! ## Format
 //!
@@ -20,11 +17,8 @@
 //!                         each: u16 schemaIdx, u8 arraySize, i32 nameIdx, PropertyType
 //! ```
 //!
-//! Only version 0 (`Initial`, uncompressed) is supported, which is what the
-//! patched dumper emits — verified by walking the real 1,649,894-byte file end
-//! to end and landing exactly on EOF, the check `tools/usmap/verify_usmap.py`
-//! also performs. Later versions add long names, large enums and an LZ4/Oodle
-//! compression envelope; they are rejected rather than mis-parsed.
+//! Supports version 0 (`Initial`) with compression method 0 (uncompressed).
+//! Other versions and compression methods are rejected.
 
 use std::collections::HashMap;
 

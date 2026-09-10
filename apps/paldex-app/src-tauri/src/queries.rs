@@ -341,8 +341,7 @@ pub struct UnownedPairingView {
     pub missing_species: Vec<String>,
 }
 
-/// A suggested pairing, with the numbers behind its ranking — the plan asks
-/// for recommendations whose inputs are visible, not a bare ordering.
+/// A suggested pairing with the ranking inputs exposed alongside the result.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BreedingPairView {
@@ -675,14 +674,9 @@ pub fn base_camp_workers(store: &Store, snapshot_id: i64) -> Result<Vec<BaseCamp
     Ok(bases)
 }
 
-/// World & player progress beyond the scalar counters `player_progress`
-/// already covers — tech tree, boss defeats, quest completion, collectibles
-/// — all of it already sitting in `player_flags` since Phase 4's ingest, just
-/// not queried back out until now. Base camp detail isn't included: who works
-/// at each base is its own query ([`base_camp_workers`]), and the rest of
-/// `BaseCampSaveData`'s bespoke binary format — buildings, storage contents,
-/// work orders — isn't decoded at all (see
-/// `paldex-model::rawdata::base_camp`'s docs).
+/// Per-player technology, boss, quest, collectible, and fast-travel flags.
+/// Worker assignments are queried separately by [`base_camp_workers`].
+/// Buildings, storage contents, and work orders are not domain-decoded.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerFlagsView {

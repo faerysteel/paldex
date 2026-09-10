@@ -28,8 +28,8 @@ state is stored on the host.
 | Breeding | Available owned pairings, unavailable pairings, and missing parent species for a selected result |
 | Bases | Base camps, guild ownership, and assigned workers |
 
-Multiplayer saves expose a player selector. All views are scoped to the selected
-player while base workers remain visible across player scopes.
+Paldex, roster, analysis, and breeding support player scoping. Bases remain
+world-scoped; ownerless Pals are included by default in roster and parent queries.
 
 Reference data—including display names, elements, artwork, base stats, and
 breeding combinations—is read from the installed `Pal-Windows.pak`. If the pak
@@ -54,9 +54,9 @@ Pal-Windows.pak              │
                        Tauri 2 backend + React frontend
 ```
 
-The SQLite store separates current snapshots from append-only dex events. A
-later save cannot remove a previously observed Paldex unlock. Current-state rows
-are replaced when a new snapshot is ingested, and old snapshots are pruned.
+Each ingest inserts snapshot-scoped rows and appends newly observed dex unlocks.
+Earlier snapshots remain until explicitly pruned; the app does not currently
+invoke pruning. Pruning snapshots leaves dex events intact.
 
 ### Save compression
 
@@ -224,20 +224,26 @@ live rendered object graph.
 ## Repository layout
 
 ```text
-apps/paldex-app/
+apps/paldex-app/          Tauri 2 desktop app
   src/                    React and TypeScript frontend
-  src-tauri/              Tauri backend, commands, queries, and sync orchestration
+  src-tauri/              Rust backend: commands, queries, sync orchestration
   preview/                Browser-only fixture preview
 crates/
   paldex-locate/          Save and pak discovery
   paldex-sav/             Save container parsing and decompression
   paldex-gvas/            UE 5.1 GVAS property-tree decoder
   paldex-model/           Domain types, RawData decoders, and analysis
-  paldex-data/            Pak reader and runtime reference-data extraction
+  paldex-data/            Pak reader and reference-data extraction
   paldex-store/           SQLite persistence and save watcher
   repak-oodle/            Vendored pak reader with cross-platform Oodle decoding
-tools/usmap/              Mapping generation and validation tools
+tools/usmap/              Mapping generation and validation
 ```
+
+Component documentation: [app](apps/paldex-app/README.md),
+[data extraction](crates/paldex-data/README.md),
+[storage](crates/paldex-store/README.md),
+[preview](apps/paldex-app/preview/README.md),
+[mappings](tools/usmap/README.md).
 
 ## License
 

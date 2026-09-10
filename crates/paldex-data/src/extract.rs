@@ -1,25 +1,13 @@
 //! Builds the reference index from the user's own installed pak.
 //!
-//! ## Where each field comes from
-//!
-//! Palworld's `DataTable` packages set `PKG_UnversionedProperties`, so row
-//! values carry no names or types. Three mechanisms cover everything the
-//! tracker needs, and all three read the user's own installation — nothing is
-//! redistributed and no third-party dataset is vendored:
-//!
-//! 1. **Name tables** are plain `FString`s in every cooked package, so
-//!    `DT_PalMonsterParameter` and `DT_PalHumanParameter` yield the full set of
-//!    Pal species keys and human-NPC keys respectively. That is exactly what
-//!    is needed to keep human NPCs out of the Pal roster — the classification
-//!    problem Phase 2 explicitly deferred to Phase 3.
-//! 2. **Localized text** is stored as `FText`, which serializes as plain
-//!    `FString`s regardless of the surrounding schema (see
-//!    [`crate::text_table`]), giving real display names for species, skills,
-//!    technologies, items, and map objects in every shipped language.
-//! 3. **Row values** — Paldeck numbers, base stats, elements, rarity and work
-//!    suitabilities — are decoded against the bundled `Mappings.usmap` by
-//!    [`crate::datatable`]. This is what retired the vendored dex-number
-//!    table that previously stood in for `ZukanIndex`.
+//! Data sources:
+//! - Package name tables: Pal/NPC classification candidates, including `_Common`
+//!   companions. Names include row keys and other referenced identifiers.
+//! - Localized text tables: species, passive, technology, item, map-object, and
+//!   UI labels, read by [`crate::text_table`].
+//! - Unversioned rows: species parameters and breeding data, decoded by
+//!   [`crate::datatable`] using the bundled `Mappings.usmap`.
+//! - Texture paths: icon entries indexed for on-demand decoding.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -319,17 +307,15 @@ impl ReferenceIndex {
     /// Bundled because the game ships none: its `DataTable`s set
     /// `PKG_UnversionedProperties`, so row values carry no names or types and
     /// are matched positionally against this. Regenerate with
-    /// `tools/usmap/regen-usmap.sh` after a game update.
+    /// `tools/usmap/regen-usmap.ps1` after a game update.
     const MAPPINGS: &'static [u8] = crate::BUNDLED_MAPPINGS;
 
     /// Attach Paldeck numbers, elements, stats, rarity and work suitabilities
     /// from `DT_PalMonsterParameter`.
     ///
-    /// Failure here is reported as a warning rather than an error: names,
-    /// classification and artwork are all schema-free and still correct
-    /// without it, so a game patch that moves this table should degrade the
-    /// tracker rather than break it. The `real_parameters` tests assert the
-    /// data really is present, so a silent regression still fails the suite.
+    /// Schema and row-decoding errors become warnings; unreadable parameter
+    /// packages are skipped. Names and icons are extracted independently, but
+    /// numeric fields and breeding results may remain incomplete.
     fn apply_parameters(&mut self, pak: &mut Pak) {
         let usmap = match Usmap::parse(Self::MAPPINGS) {
             Ok(m) => m,
@@ -531,9 +517,8 @@ impl ReferenceIndex {
 
     /// Whether `character_id` is a human NPC rather than a Pal.
     ///
-    /// Phase 2 classifies characters as Player-vs-Pal only, because the save
-    /// alone can't tell a human NPC from a Pal (both carry full IV stats).
-    /// The pak can: humans are rows of `DT_PalHumanParameter`.
+    /// Matches normalized human-parameter name candidates, excluding keys
+    /// recognized as Pals. The save decoder does not perform this classification.
     #[must_use]
     pub fn is_human_npc(&self, character_id: &str) -> bool {
         let key = normalize_key(character_id);

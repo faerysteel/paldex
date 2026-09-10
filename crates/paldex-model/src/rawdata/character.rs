@@ -1,18 +1,12 @@
 //! Decodes `CharacterSaveParameterMap` entries into [`Pal`]s.
 //!
-//! Each map entry's key carries the `InstanceId`; the value carries a `RawData`
-//! byte blob that is *itself* a nested GVAS property list containing a single
-//! `SaveParameter` struct (`PalIndividualCharacterSaveParameter`) with the real
-//! stats. See `paldex-gvas-rawdata-nesting` (memory) for how this was found.
+//! Each map key carries `InstanceId`; its value contains a `RawData` byte blob
+//! with a tagged `SaveParameter` struct (`PalIndividualCharacterSaveParameter`).
 //!
-//! Players have an in-world character entry in this same map (`IsPlayer: true`)
-//! sharing most of the same fields — these are kept out of the roster, but
-//! they are the only place the player's *name* is written down, so they are
-//! decoded into [`PlayerIdentity`] rather than merely counted. Their real
-//! progression data lives in a separate `Players/<uid>.sav` file, decoded by
-//! the `player` module; the `PlayerUId` on this map's key is the same value
-//! that file's `SaveData.PlayerUId` carries, which is what lets the two be
-//! joined.
+//! `IsPlayer` entries produce [`PlayerIdentity`], not roster Pals. Their key's
+//! `PlayerUId` joins to `SaveData.PlayerUId` in the separate player save.
+//! Other entries produce [`Pal`] records; pak-based NPC filtering is deferred
+//! to the app.
 
 use paldex_gvas::{StructValue, Value};
 use uuid::Uuid;
